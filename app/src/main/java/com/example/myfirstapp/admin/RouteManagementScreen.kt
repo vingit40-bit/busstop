@@ -27,18 +27,22 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.myfirstapp.BusRoute
 import com.example.myfirstapp.DatabaseManager
+import com.example.myfirstapp.LocationSuggestion
+import com.example.myfirstapp.fetchLiveOpenStreetMapSuggestions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -51,63 +55,6 @@ class LeafletPickerInterface(private val onPicked: (String, String) -> Unit) {
     @JavascriptInterface
     fun onLocationsPicked(origin: String, destination: String) {
         onPicked(origin, destination)
-    }
-}
-
-data class LocationSuggestion(
-    val title: String,
-    val subtitle: String,
-    val lat: Double? = null,
-    val lng: Double? = null
-)
-
-/**
- * Real-time Live OpenStreetMap Nominatim Geocoding Search Engine
- */
-suspend fun fetchLiveOpenStreetMapSuggestions(query: String): List<LocationSuggestion> {
-    if (query.trim().length < 2) return emptyList()
-    return withContext(Dispatchers.IO) {
-        try {
-            val encodedQuery = URLEncoder.encode(query.trim(), "UTF-8")
-            val urlString = "https://nominatim.openstreetmap.org/search?q=$encodedQuery&format=json&addressdetails=1&limit=8&countrycodes=ph"
-            val url = URL(urlString)
-            val connection = url.openConnection() as HttpURLConnection
-            connection.requestMethod = "GET"
-            connection.setRequestProperty("User-Agent", "TransitGoApp/1.0 (Android Native App)")
-            connection.connectTimeout = 4000
-            connection.readTimeout = 4000
-
-            if (connection.responseCode == 200) {
-                val jsonString = connection.inputStream.bufferedReader().use { it.readText() }
-                val jsonArray = JSONArray(jsonString)
-
-                val results = mutableListOf<LocationSuggestion>()
-                for (i in 0 until jsonArray.length()) {
-                    val obj = jsonArray.getJSONObject(i)
-                    val displayName = obj.optString("display_name", "")
-                    val lat = obj.optDouble("lat", 0.0)
-                    val lon = obj.optDouble("lon", 0.0)
-
-                    val parts = displayName.split(",")
-                    val shortTitle = parts.firstOrNull()?.trim() ?: displayName
-                    val remainingSubtitle = if (parts.size > 1) parts.drop(1).joinToString(",").trim() else "OpenStreetMap Real Location"
-
-                    results.add(
-                        LocationSuggestion(
-                            title = shortTitle,
-                            subtitle = remainingSubtitle,
-                            lat = if (lat != 0.0) lat else null,
-                            lng = if (lon != 0.0) lon else null
-                        )
-                    )
-                }
-                results
-            } else {
-                emptyList()
-            }
-        } catch (_: Exception) {
-            emptyList()
-        }
     }
 }
 
@@ -261,6 +208,9 @@ fun RouteManagementScreen(onBack: () -> Unit = {}) {
                             Spacer(modifier = Modifier.height(4.dp))
                             Text("Origin: ${route.startPoint}", fontSize = 13.sp, color = Color.DarkGray)
                             Text("Destination: ${route.destination}", fontSize = 13.sp, color = Color.DarkGray)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            val displayFare = if (route.fare > 0.0) route.fare else route.calculateEstimatedFare()
+                            Text("Fare: ₱%.2f".format(displayFare), fontSize = 14.sp, fontWeight = FontWeight.Bold, color = AdminGreen)
 
                             Spacer(modifier = Modifier.height(8.dp))
 
@@ -380,6 +330,7 @@ fun RouteManagementScreen(onBack: () -> Unit = {}) {
         var startPoint by remember { mutableStateOf(editingRoute?.startPoint ?: "City Terminal") }
         var destination by remember { mutableStateOf(editingRoute?.destination ?: "Airport Hub") }
         var routeName by remember { mutableStateOf(editingRoute?.routeName ?: "Route A01: $startPoint ➔ $destination") }
+        var fareInput by remember { mutableStateOf(if (editingRoute != null && editingRoute!!.fare > 0.0) editingRoute!!.fare.toString() else "") }
         var isActive by remember { mutableStateOf(editingRoute?.status != "Inactive") }
 
         var startPointLat by remember { mutableStateOf(editingRoute?.startLat ?: 0.0) }
@@ -887,6 +838,40 @@ fun RouteManagementScreen(onBack: () -> Unit = {}) {
                         modifier = Modifier.fillMaxWidth()
                     )
 
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    // Fare Input Field & Estimate Button
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = fareInput,
+                            onValueChange = { fareInput = it },
+                            label = { Text("Route Fare (₱)", color = Color.DarkGray) },
+                            placeholder = { Text("e.g. 50.00", color = Color.Gray) },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            colors = textFieldColors,
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        Button(
+                            onClick = {
+                                val tempRoute = BusRoute("", "", startPoint, destination, "Active", startPointLat, startPointLng, destPointLat, destPointLng)
+                                val est = tempRoute.calculateEstimatedFare()
+                                fareInput = est.toString()
+                                Toast.makeText(context, "Fare estimated by distance: ₱$est", Toast.LENGTH_SHORT).show()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = AdminGreen),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.height(56.dp)
+                        ) {
+                            Text("Estimate", fontSize = 12.sp)
+                        }
+                    }
+
                     // Route Active Toggle Switch
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -919,6 +904,8 @@ fun RouteManagementScreen(onBack: () -> Unit = {}) {
                             return@Button
                         }
 
+                        val finalFare = fareInput.toDoubleOrNull() ?: BusRoute("", "", startPoint, destination, "Active", startPointLat, startPointLng, destPointLat, destPointLng).calculateEstimatedFare()
+
                         val updatedRoute = BusRoute(
                             routeId = autoRouteId,
                             routeName = routeName.trim(),
@@ -928,7 +915,8 @@ fun RouteManagementScreen(onBack: () -> Unit = {}) {
                             startLat = startPointLat,
                             startLng = startPointLng,
                             destLat = destPointLat,
-                            destLng = destPointLng
+                            destLng = destPointLng,
+                            fare = finalFare
                         )
 
                         // Save Route directly to Cloud Firestore

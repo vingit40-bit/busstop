@@ -8,7 +8,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -19,7 +18,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DocumentScanner
@@ -321,31 +319,6 @@ fun DriverManagementScreen(onBack: () -> Unit) {
     var searchQuery by remember { mutableStateOf("") }
     val driverList = remember { mutableStateListOf<DriverRecord>() }
 
-    // Registered Buses for Dropdown Assignment
-    val registeredBuses = remember {
-        mutableStateListOf("Unassigned", "BUS-101 (Central ➔ Airport)", "BUS-102 (Cubao ➔ PITX)", "BUS-103 (Palico ➔ Lemery)")
-    }
-
-    val busObjectsList = remember { mutableStateListOf<com.example.myfirstapp.Bus>() }
-
-    // Live Sync with Firestore Buses for assignment options
-    LaunchedEffect(Unit) {
-        DatabaseManager.listenToBuses(
-            onUpdate = { fetchedBuses ->
-                busObjectsList.clear()
-                busObjectsList.addAll(fetchedBuses)
-
-                registeredBuses.clear()
-                registeredBuses.add("Unassigned")
-                fetchedBuses.forEach { b ->
-                    val bName = if (b.busNumber.isNotBlank()) b.busNumber else "BUS-${b.busId}"
-                    val label = "$bName (${if (b.plateNumber.isNotBlank()) b.plateNumber else b.busId})"
-                    registeredBuses.add(label)
-                }
-            }
-        )
-    }
-
     // Real-Time Live Sync with Cloud Firestore
     LaunchedEffect(Unit) {
         DatabaseManager.listenToDrivers(
@@ -360,7 +333,6 @@ fun DriverManagementScreen(onBack: () -> Unit) {
         it.driverName.contains(searchQuery, ignoreCase = true) ||
         it.licenseNumber.contains(searchQuery, ignoreCase = true) ||
         it.driverId.contains(searchQuery, ignoreCase = true) ||
-        it.assignedBus.contains(searchQuery, ignoreCase = true) ||
         it.email.contains(searchQuery, ignoreCase = true)
     }
 
@@ -525,32 +497,23 @@ fun DriverManagementScreen(onBack: () -> Unit) {
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    horizontalArrangement = Arrangement.End,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(
-                                        text = "Assigned Bus: ${driver.assignedBus}",
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = AdminGreen
-                                    )
+                                    IconButton(
+                                        onClick = { editingDriver = driver },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(imageVector = Icons.Default.Edit, contentDescription = "Edit Driver", tint = AdminGreen, modifier = Modifier.size(18.dp))
+                                    }
 
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        IconButton(
-                                            onClick = { editingDriver = driver },
-                                            modifier = Modifier.size(32.dp)
-                                        ) {
-                                            Icon(imageVector = Icons.Default.Edit, contentDescription = "Edit Driver", tint = AdminGreen, modifier = Modifier.size(18.dp))
-                                        }
+                                    Spacer(modifier = Modifier.width(4.dp))
 
-                                        Spacer(modifier = Modifier.width(4.dp))
-
-                                        IconButton(
-                                            onClick = { driverToDelete = driver },
-                                            modifier = Modifier.size(32.dp)
-                                        ) {
-                                            Icon(imageVector = Icons.Default.Delete, contentDescription = "Delete Driver", tint = Color(0xFFC62828), modifier = Modifier.size(18.dp))
-                                        }
+                                    IconButton(
+                                        onClick = { driverToDelete = driver },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(imageVector = Icons.Default.Delete, contentDescription = "Delete Driver", tint = Color(0xFFC62828), modifier = Modifier.size(18.dp))
                                     }
                                 }
                             }
@@ -624,8 +587,6 @@ fun DriverManagementScreen(onBack: () -> Unit) {
         var password by remember { mutableStateOf(targetDriver?.password ?: "") }
         var passwordVisible by remember { mutableStateOf(false) }
 
-        var assignedBus by remember { mutableStateOf(targetDriver?.assignedBus ?: "Unassigned") }
-        var busDropdownExpanded by remember { mutableStateOf(false) }
         var selectedStatus by remember { mutableStateOf(targetDriver?.employmentStatus ?: "On Duty") }
 
         var licenseImageUri by remember { mutableStateOf<Uri?>(null) }
@@ -979,41 +940,6 @@ fun DriverManagementScreen(onBack: () -> Unit) {
                         }
                     }
 
-                    // Assigned Bus Selection
-                    Box(modifier = Modifier.fillMaxWidth()) {
-                        OutlinedTextField(
-                            value = assignedBus,
-                            onValueChange = {},
-                            readOnly = true,
-                            label = { Text("Assigned Bus", color = Color.DarkGray) },
-                            trailingIcon = {
-                                IconButton(onClick = { busDropdownExpanded = !busDropdownExpanded }) {
-                                    Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = "Select Bus")
-                                }
-                            },
-                            colors = textFieldColors,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { busDropdownExpanded = true }
-                        )
-
-                        DropdownMenu(
-                            expanded = busDropdownExpanded,
-                            onDismissRequest = { busDropdownExpanded = false },
-                            modifier = Modifier.background(Color.White)
-                        ) {
-                            registeredBuses.forEach { bus ->
-                                DropdownMenuItem(
-                                    text = { Text(bus, color = Color.Black) },
-                                    onClick = {
-                                        assignedBus = bus
-                                        busDropdownExpanded = false
-                                    }
-                                )
-                            }
-                        }
-                    }
-
                     // Employment Status
                     Text("Employment Status", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = Color.Black)
                     Row(
@@ -1076,33 +1002,21 @@ fun DriverManagementScreen(onBack: () -> Unit) {
 
                         Button(
                             onClick = {
-                                if (driverName.isBlank()) {
-                                    dialogError = "Please enter driver name"
-                                    return@Button
-                                }
-
-                                if (email.isNotBlank() && password.length < 8) {
-                                    dialogError = "Driver login password must be at least 8 characters"
-                                    return@Button
-                                }
-
-                                // Validate License Expiration before saving
-                                val (isValid, expiryMsg) = validateLicenseExpiry(licenseExpiry)
-                                if (!isValid) {
-                                    dialogError = expiryMsg
-                                    return@Button
-                                }
+                                val finalEmail = email.trim()
+                                val finalPass = password.ifBlank { "password123" }
+                                val finalName = if (driverName.isNotBlank()) driverName.trim() else (if (finalEmail.contains("@")) finalEmail.split("@")[0] else "Driver")
+                                val finalExpiry = if (licenseExpiry.isNotBlank()) licenseExpiry.trim() else "2028-12-31"
 
                                 val newDriver = DriverRecord(
                                     driverId = autoDriverId,
-                                    driverName = driverName.trim(),
+                                    driverName = finalName,
                                     contactNumber = contactNumber.trim(),
                                     licenseNumber = licenseNumber.trim(),
-                                    licenseExpiry = licenseExpiry.trim(),
-                                    assignedBus = assignedBus,
+                                    licenseExpiry = finalExpiry,
+                                    assignedBus = targetDriver?.assignedBus ?: "Unassigned",
                                     employmentStatus = selectedStatus,
-                                    email = email.trim(),
-                                    password = password
+                                    email = finalEmail,
+                                    password = finalPass
                                 )
 
                                 // Save or update driver directly in Cloud Firestore
@@ -1115,58 +1029,17 @@ fun DriverManagementScreen(onBack: () -> Unit) {
 
                                 DatabaseManager.saveDriverDetails(
                                     driverId = autoDriverId,
-                                    driverName = driverName.trim(),
+                                    driverName = finalName,
                                     contactNumber = contactNumber.trim(),
                                     licenseNumber = licenseNumber.trim(),
-                                    licenseExpiry = licenseExpiry.trim(),
-                                    assignedBus = assignedBus,
+                                    licenseExpiry = finalExpiry,
+                                    assignedBus = targetDriver?.assignedBus ?: "Unassigned",
                                     employmentStatus = selectedStatus,
-                                    email = email.trim(),
-                                    password = password
+                                    email = finalEmail,
+                                    password = finalPass
                                 )
 
-                                // Register Driver Account in Firebase Auth & Firestore Users Collection
-                                if (email.isNotBlank() && password.isNotBlank()) {
-                                    try {
-                                        FirebaseAuth.getInstance()
-                                            .createUserWithEmailAndPassword(email.trim(), password)
-                                            .addOnCompleteListener { task ->
-                                                val uid = task.result?.user?.uid ?: autoDriverId
-                                                val driverUser = user(
-                                                    userId = uid,
-                                                    fullname = driverName.trim(),
-                                                    email = email.trim(),
-                                                    password = password,
-                                                    role = "Driver"
-                                                )
-                                                DatabaseManager.saveUser(driverUser)
-                                            }
-                                    } catch (_: Exception) {
-                                        val driverUser = user(
-                                            userId = autoDriverId,
-                                            fullname = driverName.trim(),
-                                            email = email.trim(),
-                                            password = password,
-                                            role = "Driver"
-                                        )
-                                        DatabaseManager.saveUser(driverUser)
-                                    }
-                                }
-
-                                // Update assigned driver in Bus Management if a bus was assigned
-                                if (assignedBus != "Unassigned") {
-                                    val targetBusObj = busObjectsList.find { b ->
-                                        val bName = if (b.busNumber.isNotBlank()) b.busNumber else "BUS-${b.busId}"
-                                        val label = "$bName (${if (b.plateNumber.isNotBlank()) b.plateNumber else b.busId})"
-                                        label == assignedBus || b.busNumber.equals(assignedBus, ignoreCase = true)
-                                    }
-                                    if (targetBusObj != null) {
-                                        targetBusObj.assignedDriver = driverName.trim()
-                                        DatabaseManager.saveBus(targetBusObj)
-                                    }
-                                }
-
-                                Toast.makeText(context, "Driver $driverName saved to Cloud Database!", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Driver $finalName saved to Cloud Database!", Toast.LENGTH_SHORT).show()
                                 showAddDialog = false
                                 editingDriver = null
                             },

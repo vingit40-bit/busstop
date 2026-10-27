@@ -1,6 +1,15 @@
-package com.example.myfirstapp
+package com.example.myfirstapp.passenger
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.Manifest
+import android.location.Location
 import android.webkit.JavascriptInterface
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -12,11 +21,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -28,7 +38,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.example.myfirstapp.BusRoute
+import com.example.myfirstapp.BusStop
+import com.example.myfirstapp.DatabaseManager
+import com.example.myfirstapp.LocationSuggestion
 import com.example.myfirstapp.admin.AdminGreen
+import com.example.myfirstapp.fetchLiveOpenStreetMapSuggestions
 
 data class RecentSearchItem(
     val title: String,
@@ -55,22 +70,91 @@ fun PassengerSearchScreen(
     val context = LocalContext.current
 
     var origin by remember { mutableStateOf("Current Location") }
+    var originFocused by remember { mutableStateOf(false) }
+    var liveOriginSuggestions by remember { mutableStateOf<List<LocationSuggestion>>(emptyList()) }
+
     var destination by remember { mutableStateOf("") }
-    var selectedTransportMode by remember { mutableStateOf("Bus") }
+    var destinationFocused by remember { mutableStateOf(false) }
+    var liveDestSuggestions by remember { mutableStateOf<List<LocationSuggestion>>(emptyList()) }
+
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            try {
+                val fusedLocationClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(context)
+                fusedLocationClient.lastLocation.addOnSuccessListener { location: Location? ->
+                    if (location != null) {
+                        fetchPrecisePhilippineAddress(context, location.latitude, location.longitude) { resolved ->
+                            origin = resolved
+                            Toast.makeText(context, "Location resolved accurately!", Toast.LENGTH_SHORT).show()
+                        }
+                    } else {
+                        Toast.makeText(context, "Unable to get GPS location. Ensure GPS is enabled.", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (_: SecurityException) {
+                Toast.makeText(context, "Location permission required", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            Toast.makeText(context, "Location permission denied", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    LaunchedEffect(origin) {
+        if (origin.trim().length >= 2 && !origin.startsWith("GPS") && !origin.startsWith("Brgy.")) {
+            delay(300)
+            val fetched = fetchLiveOpenStreetMapSuggestions(origin)
+            liveOriginSuggestions = fetched.distinctBy { it.title }
+        } else {
+            liveOriginSuggestions = emptyList()
+        }
+    }
+
+    LaunchedEffect(destination) {
+        if (destination.trim().length >= 2) {
+            delay(300)
+            val fetched = fetchLiveOpenStreetMapSuggestions(destination)
+            liveDestSuggestions = fetched.distinctBy { it.title }
+        } else {
+            liveDestSuggestions = emptyList()
+        }
+    }
+    
+    var routes by remember { mutableStateOf<List<BusRoute>>(emptyList()) }
+    var busStops by remember { mutableStateOf<List<BusStop>>(emptyList()) }
+
+    LaunchedEffect(Unit) {
+        DatabaseManager.listenToRoutes(
+            onUpdate = { fetchedRoutes -> routes = fetchedRoutes },
+            onError = {}
+        )
+        DatabaseManager.listenToBusStops(
+            onUpdate = { fetchedStops -> busStops = fetchedStops },
+            onError = {}
+        )
+    }
+
+    val dynamicSearches = remember(routes, busStops) {
+        val list = mutableListOf<RecentSearchItem>()
+        busStops.forEach { stop ->
+            list.add(RecentSearchItem(stop.stopName, stop.location, stop.status))
+        }
+        routes.forEach { route ->
+            list.add(RecentSearchItem(route.routeName, "${route.startPoint} ➔ ${route.destination}", route.status))
+        }
+        if (list.isEmpty()) {
+            listOf(
+                RecentSearchItem("Central Terminal - Manila", "Central Manila, Metro Manila", "Open 24 Hours"),
+                RecentSearchItem("Cubao Bus Station - Quezon City", "EDSA Corner Aurora Blvd, Cubao", "Open • Active Transit")
+            )
+        } else {
+            list
+        }
+    }
     
     // Track which field is opening the Leaflet map location picker: "Origin" or "Destination" or null
     var pickerTarget by remember { mutableStateOf<String?>(null) }
-
-    val recentSearches = remember {
-        listOf(
-            RecentSearchItem("Central Terminal - Manila", "Central Manila, Metro Manila", "Open 24 Hours"),
-            RecentSearchItem("Hydromed Dialysis Clinic Inc - Tuy", "Provincial Medical Center, Brgy Putol, Tuy, Batangas", "Closed • Opens 8:00 AM"),
-            RecentSearchItem("Cubao Bus Station - Quezon City", "EDSA Corner Aurora Blvd, Cubao, QC", "Open • Active Transit"),
-            RecentSearchItem("PITX Terminal - Parañaque", "Kennedy Rd, Tambo, Parañaque, Metro Manila", "Open 24 Hours"),
-            RecentSearchItem("Philhealth - Nasugbu", "Wawa, Nasugbu, Batangas", "Closed • Opens 7:00 AM"),
-            RecentSearchItem("GMQ LEMERY BATANGAS", "Illustre Avenue, Palanas, Lemery, Batangas", "Open 24 Hours")
-        )
-    }
 
     val textFieldColors = OutlinedTextFieldDefaults.colors(
         focusedTextColor = Color.Black,
@@ -90,6 +174,7 @@ fun PassengerSearchScreen(
         LeafletLocationPickerModal(
             targetType = target,
             initialLocation = currentVal,
+            busStops = busStops,
             onLocationConfirmed = { selectedName, _, _ ->
                 if (target == "Origin") {
                     origin = selectedName
@@ -162,46 +247,148 @@ fun PassengerSearchScreen(
 
                     // Input Text Fields Column
                     Column(modifier = Modifier.weight(1f)) {
-                        // Origin Input with Leaflet Map Picker button
-                        OutlinedTextField(
-                            value = origin,
-                            onValueChange = { origin = it },
-                            label = { Text("Your location (Origin)", color = Color.DarkGray, fontSize = 12.sp) },
-                            singleLine = true,
-                            colors = textFieldColors,
-                            trailingIcon = {
-                                IconButton(onClick = { pickerTarget = "Origin" }) {
-                                    Icon(
-                                        imageVector = Icons.Default.Map,
-                                        contentDescription = "Pick Origin on Leaflet Map",
-                                        tint = AdminGreen
-                                    )
+                        // Origin Input with Live Search Autocomplete
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            Column {
+                                OutlinedTextField(
+                                    value = origin,
+                                    onValueChange = {
+                                        origin = it
+                                        originFocused = true
+                                    },
+                                    label = { Text("Your location (Origin)", color = Color.DarkGray, fontSize = 12.sp) },
+                                    singleLine = true,
+                                    colors = textFieldColors,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+
+                                if (originFocused && liveOriginSuggestions.isNotEmpty()) {
+                                    Card(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(top = 4.dp),
+                                        shape = RoundedCornerShape(12.dp),
+                                        colors = CardDefaults.cardColors(containerColor = Color.White),
+                                        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+                                        border = BorderStroke(1.dp, Color(0xFFE0E0E0))
+                                    ) {
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .heightIn(max = 220.dp)
+                                                .verticalScroll(rememberScrollState())
+                                        ) {
+                                            liveOriginSuggestions.forEach { suggestion ->
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .clickable {
+                                                            origin = suggestion.title
+                                                            originFocused = false
+                                                        }
+                                                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Surface(
+                                                        color = Color(0xFFE3F2FD),
+                                                        shape = CircleShape,
+                                                        modifier = Modifier.size(32.dp)
+                                                    ) {
+                                                        Box(contentAlignment = Alignment.Center) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.LocationOn,
+                                                                contentDescription = null,
+                                                                tint = Color(0xFF1976D2),
+                                                                modifier = Modifier.size(18.dp)
+                                                            )
+                                                        }
+                                                    }
+                                                    Spacer(modifier = Modifier.width(12.dp))
+                                                    Column(modifier = Modifier.weight(1f)) {
+                                                        Text(suggestion.title, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.Black)
+                                                        Text(suggestion.subtitle, fontSize = 11.sp, color = Color.Gray)
+                                                    }
+                                                }
+                                                HorizontalDivider(color = Color(0xFFF0F0F0))
+                                            }
+                                        }
+                                    }
                                 }
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                            }
+                        }
 
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        // Destination Input with Leaflet Map Picker button
-                        OutlinedTextField(
-                            value = destination,
-                            onValueChange = { destination = it },
-                            label = { Text("Choose final destination", color = Color.DarkGray, fontSize = 12.sp) },
-                            placeholder = { Text("Search city, station, or terminal", color = Color.Gray) },
-                            singleLine = true,
-                            colors = textFieldColors,
-                            trailingIcon = {
-                                IconButton(onClick = { pickerTarget = "Destination" }) {
-                                    Icon(
-                                        imageVector = Icons.Default.Map,
-                                        contentDescription = "Pick Destination on Leaflet Map",
-                                        tint = AdminGreen
-                                    )
+                        // Destination Input with Live Search Autocomplete
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            Column {
+                                OutlinedTextField(
+                                    value = destination,
+                                    onValueChange = {
+                                        destination = it
+                                        destinationFocused = true
+                                    },
+                                    label = { Text("Choose final destination", color = Color.DarkGray, fontSize = 12.sp) },
+                                    placeholder = { Text("Search city, station, or terminal", color = Color.Gray) },
+                                    singleLine = true,
+                                    colors = textFieldColors,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+
+                                if (destinationFocused && liveDestSuggestions.isNotEmpty()) {
+                                    Card(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(top = 4.dp),
+                                        shape = RoundedCornerShape(12.dp),
+                                        colors = CardDefaults.cardColors(containerColor = Color.White),
+                                        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+                                        border = BorderStroke(1.dp, Color(0xFFE0E0E0))
+                                    ) {
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .heightIn(max = 220.dp)
+                                                .verticalScroll(rememberScrollState())
+                                        ) {
+                                            liveDestSuggestions.forEach { suggestion ->
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .clickable {
+                                                            destination = suggestion.title
+                                                            destinationFocused = false
+                                                        }
+                                                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Surface(
+                                                        color = Color(0xFFFFEBEE),
+                                                        shape = CircleShape,
+                                                        modifier = Modifier.size(32.dp)
+                                                    ) {
+                                                        Box(contentAlignment = Alignment.Center) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.DirectionsBus,
+                                                                contentDescription = null,
+                                                                tint = Color(0xFFD32F2F),
+                                                                modifier = Modifier.size(18.dp)
+                                                            )
+                                                        }
+                                                    }
+                                                    Spacer(modifier = Modifier.width(12.dp))
+                                                    Column(modifier = Modifier.weight(1f)) {
+                                                        Text(suggestion.title, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.Black)
+                                                        Text(suggestion.subtitle, fontSize = 11.sp, color = Color.Gray)
+                                                    }
+                                                }
+                                                HorizontalDivider(color = Color(0xFFF0F0F0))
+                                            }
+                                        }
+                                    }
                                 }
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                            }
+                        }
                     }
 
                     Spacer(modifier = Modifier.width(8.dp))
@@ -223,123 +410,29 @@ fun PassengerSearchScreen(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Quick Buttons for Leaflet Map Picker (Choose Origin or Destination on Leaflet Map)
-                Row(
+                // Auto GPS Button
+                OutlinedButton(
+                    onClick = { locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION) },
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, AdminGreen),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = AdminGreen)
                 ) {
-                    OutlinedButton(
-                        onClick = { pickerTarget = "Origin" },
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(10.dp),
-                        border = BorderStroke(1.dp, AdminGreen),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = AdminGreen)
-                    ) {
-                        Icon(imageVector = Icons.Default.MyLocation, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Pick Origin on Map", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    }
-
-                    OutlinedButton(
-                        onClick = { pickerTarget = "Destination" },
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(10.dp),
-                        border = BorderStroke(1.dp, AdminGreen),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = AdminGreen)
-                    ) {
-                        Icon(imageVector = Icons.Default.Place, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Pick Destination on Map", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Transport Mode Selector Pills (Bus / Car / Motorcycle / Walking)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly
-        ) {
-            listOf(
-                Pair("Bus", Icons.Default.DirectionsBus),
-                Pair("Car", Icons.Default.DirectionsCar),
-                Pair("Motorcycle", Icons.Default.TwoWheeler),
-                Pair("Walking", Icons.AutoMirrored.Filled.DirectionsWalk)
-            ).forEach { (mode, icon) ->
-                val isSelected = selectedTransportMode == mode
-                Surface(
-                    shape = RoundedCornerShape(20.dp),
-                    color = if (isSelected) AdminGreen else Color.White,
-                    border = BorderStroke(1.dp, if (isSelected) AdminGreen else Color.LightGray),
-                    modifier = Modifier
-                        .clickable { selectedTransportMode = mode }
-                        .padding(horizontal = 4.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = icon,
-                            contentDescription = mode,
-                            tint = if (isSelected) Color.White else Color.DarkGray,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Quick Saved Places (Home / Work)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = Color.White,
-                border = BorderStroke(1.dp, Color.LightGray),
-                modifier = Modifier.clickable { destination = "Home (Batangas)" }
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(imageVector = Icons.Default.Home, contentDescription = "Home", tint = AdminGreen, modifier = Modifier.size(16.dp))
+                    Icon(imageVector = Icons.Default.MyLocation, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Home", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.Black)
-                }
-            }
-
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = Color.White,
-                border = BorderStroke(1.dp, Color.LightGray),
-                modifier = Modifier.clickable { destination = "Workplace" }
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(imageVector = Icons.Default.Work, contentDescription = "Work", tint = AdminGreen, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Work", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.Black)
+                    Text("Auto GPS (Detect Current Location)", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // Recent Searches List
-        Text("Recent Searches & Terminals", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+        // Dynamic Routes & Terminals List
+        Text("Active Routes & Terminals", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.Black)
         Spacer(modifier = Modifier.height(10.dp))
 
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(recentSearches) { searchItem ->
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
+            items(dynamicSearches) { searchItem ->
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -365,8 +458,8 @@ fun PassengerSearchScreen(
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     imageVector = Icons.Default.History,
-                                    contentDescription = "Recent",
-                                    tint = Color.Gray,
+                                    contentDescription = "Route/Terminal",
+                                    tint = AdminGreen,
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
@@ -386,7 +479,7 @@ fun PassengerSearchScreen(
             }
         }
 
-        Spacer(modifier = Modifier.weight(1f))
+        Spacer(modifier = Modifier.height(12.dp))
 
         // Search Buses Button
         Button(
@@ -412,13 +505,13 @@ fun PassengerSearchScreen(
 
 /**
  * Interactive Leaflet Map Location Picker Component.
- * Allows users to choose an Origin or Final Destination on an OpenStreetMap Leaflet Map
- * by clicking on available bus stop/terminal markers or tapping anywhere on the map to drop a pin.
+ * Dynamically loads bus stops and terminals from Supabase.
  */
 @Composable
 fun LeafletLocationPickerModal(
-    targetType: String, // "Origin" or "Destination"
+    targetType: String,
     initialLocation: String,
+    busStops: List<BusStop>,
     onLocationConfirmed: (String, Double, Double) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -429,6 +522,22 @@ fun LeafletLocationPickerModal(
     var isMapLoaded by remember { mutableStateOf(false) }
 
     val handler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
+
+    val stopsJson = if (busStops.isEmpty()) {
+        """
+        [
+            { name: "Central Terminal - Manila", address: "Central Manila, Metro Manila", lat: 14.5995, lng: 120.9842 },
+            { name: "PITX Terminal - Parañaque", address: "Kennedy Rd, Tambo, Parañaque", lat: 14.5092, lng: 120.9917 }
+        ]
+        """
+    } else {
+        val sb = StringBuilder("[")
+        busStops.forEachIndexed { index, stop ->
+            if (index > 0) sb.append(",")
+            sb.append("{ name: \"${stop.stopName}\", address: \"${stop.location}\", lat: ${stop.latitude}, lng: ${stop.longitude} }")
+        }
+        sb.append("]").toString()
+    }
 
     val leafletPickerHtml = """
         <!DOCTYPE html>
@@ -458,16 +567,7 @@ fun LeafletLocationPickerModal(
 
                         var activeMarker = null;
 
-                        var availableLocations = [
-                            { name: "Central Terminal - Manila", address: "Central Manila, Metro Manila", lat: 14.5995, lng: 120.9842 },
-                            { name: "PITX Terminal - Parañaque", address: "Kennedy Rd, Tambo, Parañaque", lat: 14.5092, lng: 120.9917 },
-                            { name: "Cubao Bus Station - Quezon City", address: "EDSA Corner Aurora Blvd, Cubao", lat: 14.6195, lng: 121.0511 },
-                            { name: "Airport Hub - NAIA", address: "NAIA Terminal, Pasay, Metro Manila", lat: 14.5204, lng: 121.0122 },
-                            { name: "Philhealth - Nasugbu", address: "Wawa, Nasugbu, Batangas", lat: 14.0722, lng: 120.6311 },
-                            { name: "Palico Grand Terminal - Nasugbu", address: "2MXX+8G6, Tagaytay - Nasugbu Hwy, Nasugbu, Batangas", lat: 14.0728, lng: 120.6983 },
-                            { name: "GMQ LEMERY BATANGAS", address: "Illustre Avenue, Palanas, Lemery", lat: 13.8822, lng: 120.9111 },
-                            { name: "Hydromed Dialysis Clinic Inc - Tuy", address: "Brgy Putol, Tuy, Batangas", lat: 14.0200, lng: 120.7300 }
-                        ];
+                        var availableLocations = $stopsJson;
 
                         var greenIcon = L.icon({
                             iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
@@ -487,10 +587,9 @@ fun LeafletLocationPickerModal(
                             shadowSize: [41, 41]
                         });
 
-                        // Render all Available Locations on Map
                         availableLocations.forEach(function(loc) {
                             var m = L.marker([loc.lat, loc.lng], { icon: greenIcon }).addTo(map);
-                            m.bindPopup("<b>" + loc.name + "</b><br><span class='avail-badge'>Available Location</span><br>" + loc.address);
+                            m.bindPopup("<b>" + loc.name + "</b><br><span class='avail-badge'>Supabase Terminal</span><br>" + loc.address);
                             m.on('click', function() {
                                 markSelected(loc.name, loc.address, loc.lat, loc.lng);
                             });
@@ -507,10 +606,8 @@ fun LeafletLocationPickerModal(
                             }
                         }
 
-                        // Select default point
                         markSelected("$selectedName", "Selected on Leaflet OpenStreetMap", 14.5995, 120.9842);
 
-                        // Tap anywhere on Map to pick custom location pin
                         map.on('click', function(e) {
                             var lat = e.latlng.lat.toFixed(4);
                             var lng = e.latlng.lng.toFixed(4);
@@ -533,7 +630,6 @@ fun LeafletLocationPickerModal(
             .fillMaxSize()
             .background(Color(0xFFF5F8F6))
     ) {
-        // Top Header
         Surface(
             color = AdminGreen,
             modifier = Modifier.fillMaxWidth()
@@ -568,7 +664,6 @@ fun LeafletLocationPickerModal(
             }
         }
 
-        // Leaflet Map Container
         Box(modifier = Modifier.weight(1f)) {
             AndroidView(
                 factory = { ctx ->
@@ -618,7 +713,6 @@ fun LeafletLocationPickerModal(
             }
         }
 
-        // Bottom Selected Location Action Card
         Card(
             modifier = Modifier
                 .fillMaxWidth()
@@ -701,6 +795,76 @@ fun LeafletLocationPickerModal(
                     }
                 }
             }
+        }
+    }
+}
+
+fun fetchPrecisePhilippineAddress(context: android.content.Context, lat: Double, lng: Double, onResult: (String) -> Unit) {
+    CoroutineScope(Dispatchers.IO).launch {
+        try {
+            val url = java.net.URL("https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lng&zoom=18&addressdetails=1")
+            val connection = (url.openConnection() as java.net.HttpURLConnection).apply {
+                requestMethod = "GET"
+                setRequestProperty("User-Agent", "TransitGoBusApp/1.0")
+                connectTimeout = 5000
+                readTimeout = 5000
+            }
+            if (connection.responseCode in 200..299) {
+                val response = connection.inputStream.bufferedReader().use { it.readText() }
+                val json = org.json.JSONObject(response)
+                val addressObj = json.optJSONObject("address")
+                if (addressObj != null) {
+                    val village = addressObj.optString("village", "")
+                    val suburb = addressObj.optString("suburb", "")
+                    val barangay = if (village.isNotBlank()) village else suburb
+                    val town = addressObj.optString("town", "")
+                    val municipality = addressObj.optString("municipality", "")
+                    val city = addressObj.optString("city", "")
+                    val townOrCity = if (town.isNotBlank()) town else if (municipality.isNotBlank()) municipality else city
+                    val province = addressObj.optString("state", addressObj.optString("province", ""))
+
+                    val parts = mutableListOf<String>()
+                    if (barangay.isNotBlank()) parts.add("Brgy. $barangay")
+                    if (townOrCity.isNotBlank()) parts.add(townOrCity)
+                    if (province.isNotBlank()) parts.add(province)
+
+                    val formatted = if (parts.isNotEmpty()) parts.joinToString(", ") else json.optString("display_name", "")
+                    if (formatted.isNotBlank()) {
+                        withContext(Dispatchers.Main) {
+                            onResult(formatted.replace(", Philippines", "").trim())
+                        }
+                        return@launch
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+
+        try {
+            val geocoder = android.location.Geocoder(context, java.util.Locale.getDefault())
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                geocoder.getFromLocation(lat, lng, 1) { addresses ->
+                    if (addresses.isNotEmpty()) {
+                        val address = addresses[0]
+                        val barangay = address.subLocality ?: address.featureName ?: ""
+                        val municipality = address.locality ?: address.subAdminArea ?: ""
+                        val province = address.adminArea ?: ""
+                        val parts = listOf("Brgy. $barangay", municipality, province).filter { it.isNotBlank() && !it.matches(Regex("^[0-9]+$")) }.distinct()
+                        val res = if (parts.isNotEmpty()) parts.joinToString(", ") else "GPS Location (%.4f, %.4f)".format(lat, lng)
+                        CoroutineScope(Dispatchers.Main).launch {
+                            onResult(res)
+                        }
+                    } else {
+                        CoroutineScope(Dispatchers.Main).launch {
+                            onResult("GPS Location (%.4f, %.4f)".format(lat, lng))
+                        }
+                    }
+                }
+                return@launch
+            }
+        } catch (_: Exception) {}
+
+        withContext(Dispatchers.Main) {
+            onResult("GPS Location (%.4f, %.4f)".format(lat, lng))
         }
     }
 }

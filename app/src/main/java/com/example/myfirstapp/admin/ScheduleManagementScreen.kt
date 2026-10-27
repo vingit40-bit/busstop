@@ -110,6 +110,7 @@ fun ScheduleManagementScreen(onBack: () -> Unit = {}) {
     var showAddDialog by remember { mutableStateOf(false) }
     var editingSchedule by remember { mutableStateOf<ScheduleRecord?>(null) }
     var scheduleToDelete by remember { mutableStateOf<ScheduleRecord?>(null) }
+    var scheduleLoadError by remember { mutableStateOf("") }
 
     // Google Calendar Real Date State (Default = Today's System Date)
     val todaySdf = remember { SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH) }
@@ -128,6 +129,7 @@ fun ScheduleManagementScreen(onBack: () -> Unit = {}) {
     LaunchedEffect(Unit) {
         DatabaseManager.listenToSchedules(
             onUpdate = { fetchedSchedules ->
+                scheduleLoadError = ""
                 scheduleList.clear()
                 fetchedSchedules.forEach { s ->
                     scheduleList.add(
@@ -143,6 +145,9 @@ fun ScheduleManagementScreen(onBack: () -> Unit = {}) {
                         )
                     )
                 }
+            },
+            onError = { error ->
+                scheduleLoadError = error.localizedMessage ?: "Failed to load schedules from Firestore"
             }
         )
 
@@ -246,6 +251,15 @@ fun ScheduleManagementScreen(onBack: () -> Unit = {}) {
             }
 
             Spacer(modifier = Modifier.height(10.dp))
+
+            if (scheduleLoadError.isNotBlank()) {
+                Text(
+                    text = "Could not load schedules: $scheduleLoadError",
+                    color = MaterialTheme.colorScheme.error,
+                    fontSize = 12.sp
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
 
             // Calendar Ribbon Header
             Row(
@@ -532,6 +546,7 @@ fun ScheduleManagementScreen(onBack: () -> Unit = {}) {
         val arrivalTimeState = rememberTimePickerState(initialHour = arrHour, initialMinute = arrMin, is24Hour = false)
 
         var dialogError by remember { mutableStateOf("") }
+        var isSaving by remember { mutableStateOf(false) }
 
         val textFieldColors = OutlinedTextFieldDefaults.colors(
             focusedTextColor = Color.Black,
@@ -825,6 +840,9 @@ fun ScheduleManagementScreen(onBack: () -> Unit = {}) {
             confirmButton = {
                 Button(
                     onClick = {
+                        if (isSaving) return@Button
+                        isSaving = true
+                        dialogError = ""
                         val newScheduleRecord = ScheduleRecord(
                             scheduleId = autoScheduleId,
                             busNumber = selectedBus,
@@ -835,13 +853,6 @@ fun ScheduleManagementScreen(onBack: () -> Unit = {}) {
                             status = selectedStatus,
                             dateDay = scheduleDateInput.trim()
                         )
-
-                        val existingIndex = scheduleList.indexOfFirst { it.scheduleId == autoScheduleId }
-                        if (existingIndex != -1) {
-                            scheduleList[existingIndex] = newScheduleRecord
-                        } else {
-                            scheduleList.add(0, newScheduleRecord)
-                        }
 
                         val sampleBus = Bus(autoScheduleId, selectedBus, 50, selectedStatus)
                         sampleBus.assignedDriver = selectedDriver
@@ -854,15 +865,32 @@ fun ScheduleManagementScreen(onBack: () -> Unit = {}) {
                             arrivalTime = arrivalTime.trim()
                         )
                         busScheduleObj.status = selectedStatus
-                        DatabaseManager.saveBusSchedule(busScheduleObj, driverName = selectedDriver, scheduleDate = scheduleDateInput.trim())
-
-                        Toast.makeText(context, "Schedule $autoScheduleId saved to Cloud Database!", Toast.LENGTH_SHORT).show()
-                        showAddDialog = false
-                        editingSchedule = null
+                        DatabaseManager.saveBusSchedule(
+                            busScheduleObj,
+                            driverName = selectedDriver,
+                            scheduleDate = scheduleDateInput.trim(),
+                            onSuccess = {
+                                val existingIndex = scheduleList.indexOfFirst { it.scheduleId == autoScheduleId }
+                                if (existingIndex != -1) {
+                                    scheduleList[existingIndex] = newScheduleRecord
+                                } else {
+                                    scheduleList.add(0, newScheduleRecord)
+                                }
+                                isSaving = false
+                                Toast.makeText(context, "Schedule $autoScheduleId saved.", Toast.LENGTH_SHORT).show()
+                                showAddDialog = false
+                                editingSchedule = null
+                            },
+                            onFailure = { error ->
+                                isSaving = false
+                                dialogError = error.localizedMessage ?: "Could not save schedule. Check your connection and Firestore permissions."
+                            }
+                        )
                     },
+                    enabled = !isSaving,
                     colors = ButtonDefaults.buttonColors(containerColor = AdminGreen)
                 ) {
-                    Text("Save Schedule", color = Color.White, fontWeight = FontWeight.Bold)
+                    Text(if (isSaving) "Saving..." else "Save Schedule", color = Color.White, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {

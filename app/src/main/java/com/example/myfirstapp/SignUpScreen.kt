@@ -20,7 +20,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.myfirstapp.ui.theme.MyFirstAppTheme
-import com.google.firebase.auth.FirebaseAuth
+
 
 val TransitGreen = Color(0xFF116530)
 
@@ -30,7 +30,6 @@ fun SignUpScreen(
     onNavigateToLogin: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    var selectedRole by remember { mutableStateOf("Passenger") }
 
     var fullName by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
@@ -41,8 +40,6 @@ fun SignUpScreen(
 
     var errorMessage by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
-
-    val roles = listOf("Passenger", "Staff")
 
     val textFieldColors = OutlinedTextFieldDefaults.colors(
         focusedTextColor = Color.Black,
@@ -90,26 +87,7 @@ fun SignUpScreen(
                     modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
                 )
 
-                // Segmented Role Selector Tab
-                SingleChoiceSegmentedButtonRow(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    roles.forEachIndexed { index, role ->
-                        SegmentedButton(
-                            selected = selectedRole == role,
-                            onClick = { selectedRole = role },
-                            shape = SegmentedButtonDefaults.itemShape(index = index, count = roles.size),
-                            colors = SegmentedButtonDefaults.colors(
-                                activeContainerColor = TransitGreen,
-                                activeContentColor = Color.White,
-                                inactiveContainerColor = Color(0xFFF0F4F1),
-                                inactiveContentColor = Color.DarkGray
-                            )
-                        ) {
-                            Text(text = role, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-                }
+                val selectedRole = "Passenger"
 
                 Spacer(modifier = Modifier.height(20.dp))
 
@@ -226,27 +204,27 @@ fun SignUpScreen(
                             else -> {
                                 isLoading = true
                                 errorMessage = ""
-                                FirebaseAuth.getInstance()
-                                    .createUserWithEmailAndPassword(email.trim(), password)
-                                    .addOnSuccessListener { authResult ->
+                                val uid = "U_${System.currentTimeMillis()}"
+                                val newUser = user(
+                                    userId = uid,
+                                    fullname = fullName.trim(),
+                                    email = email.trim(),
+                                    password = password,
+                                    role = selectedRole
+                                )
+                                DatabaseManager.saveUser(
+                                    user = newUser,
+                                    onSuccess = {
                                         isLoading = false
-                                        val uid = authResult.user?.uid ?: "U_${System.currentTimeMillis()}"
-                                        val newUser = user(
-                                            userId = uid,
-                                            fullname = fullName.trim(),
-                                            email = email.trim(),
-                                            password = password,
-                                            role = selectedRole
-                                        )
-                                        DatabaseManager.saveUser(newUser)
                                         Toast.makeText(context, "Account created successfully as $selectedRole!", Toast.LENGTH_SHORT).show()
                                         onSignUpSuccess(newUser)
-                                    }
-                                    .addOnFailureListener { e ->
+                                    },
+                                    onFailure = { e ->
                                         isLoading = false
-                                        errorMessage = e.localizedMessage ?: "Failed to create account in Firebase"
-                                        Toast.makeText(context, "Sign Up Notice: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                                        errorMessage = e.localizedMessage ?: "Failed to create account in Supabase"
+                                        Toast.makeText(context, "Error: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
                                     }
+                                )
                             }
                         }
                     },

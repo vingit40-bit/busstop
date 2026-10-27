@@ -1,6 +1,12 @@
 package com.example.myfirstapp
 
-import com.google.firebase.firestore.FirebaseFirestore
+import android.util.Log
+import kotlinx.coroutines.*
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.OutputStreamWriter
+import java.net.HttpURLConnection
+import java.net.URL
 
 data class DriverRecord(
     val driverId: String,
@@ -14,37 +20,171 @@ data class DriverRecord(
     var password: String = ""
 )
 
-object DatabaseManager {
-    private val db: FirebaseFirestore by lazy {
-        val instance = FirebaseFirestore.getInstance()
+data class ConductorRecord(
+    val id: String,
+    var fullName: String,
+    var employeeId: String,
+    var phoneNumber: String,
+    var email: String,
+    var username: String = "",
+    var role: String = "Conductor",
+    var assignedBusId: String = "",
+    var status: String = "On Duty",
+    var password: String = "password123"
+)
+
+data class BookingRecord(
+    val bookingId: String,
+    val busId: String,
+    val routeName: String,
+    val seats: String,
+    val totalPrice: Double,
+    val passengerEmail: String,
+    val status: String = "Confirmed"
+)
+
+data class LocationSuggestion(
+    val title: String,
+    val subtitle: String,
+    val lat: Double? = null,
+    val lng: Double? = null
+)
+
+suspend fun fetchLiveOpenStreetMapSuggestions(query: String): List<LocationSuggestion> {
+    if (query.trim().length < 2) return emptyList()
+    return withContext(Dispatchers.IO) {
         try {
-            val settings = com.google.firebase.firestore.FirebaseFirestoreSettings.Builder()
-                .setLocalCacheSettings(com.google.firebase.firestore.PersistentCacheSettings.newBuilder().build())
-                .build()
-            instance.firestoreSettings = settings
-        } catch (_: Exception) { }
-        instance
+            val encodedQuery = java.net.URLEncoder.encode(query.trim(), "UTF-8")
+            val urlString = "https://nominatim.openstreetmap.org/search?q=$encodedQuery&format=json&addressdetails=1&limit=8&countrycodes=ph"
+            val url = URL(urlString)
+            val connection = url.openConnection() as HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.setRequestProperty("User-Agent", "TransitGoApp/1.0 (Android Native App)")
+            connection.connectTimeout = 4000
+            connection.readTimeout = 4000
+
+            if (connection.responseCode == 200) {
+                val jsonString = connection.inputStream.bufferedReader().use { it.readText() }
+                val jsonArray = JSONArray(jsonString)
+
+                val results = mutableListOf<LocationSuggestion>()
+                for (i in 0 until jsonArray.length()) {
+                    val obj = jsonArray.getJSONObject(i)
+                    val displayName = obj.optString("display_name", "")
+                    val lat = obj.optDouble("lat", 0.0)
+                    val lon = obj.optDouble("lon", 0.0)
+
+                    val parts = displayName.split(",")
+                    val shortTitle = parts.firstOrNull()?.trim() ?: displayName
+                    val remainingSubtitle = if (parts.size > 1) parts.drop(1).joinToString(",").trim() else "OpenStreetMap Real Location"
+
+                    results.add(
+                        LocationSuggestion(
+                            title = shortTitle,
+                            subtitle = remainingSubtitle,
+                            lat = if (lat != 0.0) lat else null,
+                            lng = if (lon != 0.0) lon else null
+                        )
+                    )
+                }
+                results
+            } else {
+                emptyList()
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+}
+
+object DatabaseManager {
+    private const val SUPABASE_URL = "https://ulhylotzjyvevtiufrmb.supabase.co/rest/v1"
+    private const val SUPABASE_KEY = "sb_publishable_5oMPc30otC3gVjqvTH_SUA_JWwlIn9U"
+
+    private val ioScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    private fun JSONObject.safeString(key: String, default: String = ""): String {
+        if (this.isNull(key)) return default
+        val v = this.optString(key, default)
+        return if (v == "null" || v.isEmpty()) default else v
     }
 
-    // Save or update User in Firestore
+    private fun makeRequest(endpoint: String, method: String, jsonBody: String? = null): String? {
+        return try {
+            val url = URL("$SUPABASE_URL/$endpoint")
+            val connection = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = method
+                setRequestProperty("apikey", SUPABASE_KEY)
+                setRequestProperty("Authorization", "Bearer $SUPABASE_KEY")
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Prefer", "resolution=merge-duplicates,return=representation")
+                doInput = true
+                if (jsonBody != null && (method == "POST" || method == "PATCH" || method == "PUT")) {
+                    doOutput = true
+                }
+            }
+
+            if (jsonBody != null && (method == "POST" || method == "PATCH" || method == "PUT")) {
+                OutputStreamWriter(connection.outputStream).use { it.write(jsonBody) }
+            }
+
+            val responseCode = connection.responseCode
+            if (responseCode in 200..299) {
+                connection.inputStream.bufferedReader().use { it.readText() }
+            } else {
+                val err = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: "Unknown error"
+                Log.e("Supabase", "Error $responseCode: $err")
+                null
+            }
+        } catch (e: Exception) {
+            Log.e("Supabase", "Exception: ${e.localizedMessage}", e)
+            null
+        }
+    }
+
+    // --- USERS ---
     fun saveUser(
         user: user,
         onSuccess: () -> Unit = {},
         onFailure: (Exception) -> Unit = {}
     ) {
-        val userData = hashMapOf(
-            "userId" to user.userId,
-            "fullname" to user.fullname,
-            "email" to user.email,
-            "role" to user.role
-        )
-        db.collection("users").document(user.userId)
-            .set(userData)
-            .addOnSuccessListener { onSuccess() }
-            .addOnFailureListener { e -> onFailure(e) }
+        ioScope.launch {
+            val json = JSONObject().apply {
+                put("user_id", user.userId)
+                put("fullname", user.fullname)
+                put("email", user.email)
+                put("role", user.role)
+                put("password", "")
+            }.toString()
+
+            try {
+                val url = URL("$SUPABASE_URL/users")
+                val connection = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    setRequestProperty("apikey", SUPABASE_KEY)
+                    setRequestProperty("Authorization", "Bearer $SUPABASE_KEY")
+                    setRequestProperty("Content-Type", "application/json")
+                    setRequestProperty("Prefer", "resolution=merge-duplicates,return=representation")
+                    doInput = true
+                    doOutput = true
+                }
+
+                OutputStreamWriter(connection.outputStream).use { it.write(json) }
+                val responseCode = connection.responseCode
+                if (responseCode in 200..299) {
+                    withContext(Dispatchers.Main) { onSuccess() }
+                } else {
+                    val err = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: "Error $responseCode"
+                    Log.e("Supabase", "Save user error: $err")
+                    withContext(Dispatchers.Main) { onFailure(Exception(err)) }
+                }
+            } catch (e: Exception) {
+                Log.e("Supabase", "Save user exception: ${e.localizedMessage}", e)
+                withContext(Dispatchers.Main) { onFailure(e) }
+            }
+        }
     }
 
-    // Fetch User Profile and Role from Firestore by userId
     fun getUser(
         userId: String,
         onSuccess: (user?) -> Unit,
@@ -54,106 +194,116 @@ object DatabaseManager {
             onSuccess(null)
             return
         }
-        db.collection("users").document(userId)
-            .get()
-            .addOnSuccessListener { doc ->
-                if (doc.exists()) {
-                    val uId = doc.getString("userId") ?: doc.id
-                    val fullname = doc.getString("fullname") ?: "Transit User"
-                    val email = doc.getString("email") ?: ""
-                    val role = doc.getString("role") ?: "Passenger"
-                    onSuccess(user(uId, fullname, email, "", role))
-                } else {
-                    onSuccess(null)
+        ioScope.launch {
+            val res = makeRequest("users?user_id=eq.$userId", "GET")
+            withContext(Dispatchers.Main) {
+                try {
+                    if (res != null) {
+                        val arr = JSONArray(res)
+                        if (arr.length() > 0) {
+                            val obj = arr.getJSONObject(0)
+                            val uId = obj.safeString("user_id", userId)
+                            val fullname = obj.safeString("fullname", "Transit User")
+                            val email = obj.safeString("email")
+                            val role = obj.safeString("role", "Passenger")
+                            val password = obj.safeString("password")
+                            onSuccess(user(uId, fullname, email, password, role))
+                        } else {
+                            onSuccess(null)
+                        }
+                    } else {
+                        onSuccess(null)
+                    }
+                } catch (e: Exception) {
+                    onFailure(e)
                 }
             }
-            .addOnFailureListener { e -> onFailure(e) }
+        }
     }
 
-    // Save or update Bus in Firestore
+    // --- BUSES ---
     fun saveBus(
         bus: Bus,
         onSuccess: () -> Unit = {},
         onFailure: (Exception) -> Unit = {}
     ) {
-        val busData = hashMapOf(
-            "busId" to bus.busId,
-            "busNumber" to bus.busNumber,
-            "plateNumber" to bus.plateNumber,
-            "busType" to bus.busType,
-            "capacity" to bus.capacity,
-            "assignedDriver" to bus.assignedDriver,
-            "operator" to bus.operator,
-            "route" to bus.route,
-            "busStop" to bus.busStop,
-            "departureTime" to bus.departureTime,
-            "status" to bus.status,
-            "imageUrl" to bus.imageUrl
-        )
-        db.collection("buses").document(bus.busId)
-            .set(busData)
-            .addOnSuccessListener { onSuccess() }
-            .addOnFailureListener { e -> onFailure(e) }
-    }
+        ioScope.launch {
+            val json = JSONObject().apply {
+                put("bus_id", bus.busId)
+                put("bus_number", bus.busNumber)
+                put("plate_number", bus.plateNumber)
+                put("bus_type", bus.busType)
+                put("capacity", bus.capacity)
+                put("assigned_driver", bus.assignedDriver)
+                put("operator", bus.operator)
+                put("route", bus.route)
+                put("bus_stop", bus.busStop)
+                put("departure_time", bus.departureTime)
+                put("status", bus.status)
+                put("image_url", bus.imageUrl)
+            }.toString()
 
-    // Real-time live listener for Buses from Cloud Firestore
-    fun listenToBuses(
-        onUpdate: (List<Bus>) -> Unit,
-        onError: (Exception) -> Unit = {}
-    ) {
-        db.collection("buses").addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                onError(error)
-                return@addSnapshotListener
-            }
-            if (snapshot != null) {
-                val buses = snapshot.documents.mapNotNull { doc ->
-                    val busId = doc.getString("busId") ?: doc.id
-                    val busNumber = doc.getString("busNumber") ?: ""
-                    val capacity = (doc.getLong("capacity") ?: 50L).toInt()
-                    val status = doc.getString("status") ?: "Active"
-                    val plateNumber = doc.getString("plateNumber") ?: ""
-                    val busType = doc.getString("busType") ?: "Air-conditioned"
-                    val assignedDriver = doc.getString("assignedDriver") ?: "Unassigned"
-                    val operator = doc.getString("operator") ?: ""
-                    val route = doc.getString("route") ?: ""
-                    val busStop = doc.getString("busStop") ?: ""
-                    val departureTime = doc.getString("departureTime") ?: "08:00"
-                    val imageUrl = doc.getString("imageUrl") ?: ""
-
-                    Bus(
-                        busId = busId,
-                        busNumber = busNumber,
-                        capacity = capacity,
-                        status = status,
-                        plateNumber = plateNumber,
-                        busType = busType,
-                        assignedDriver = assignedDriver,
-                        operator = operator,
-                        route = route,
-                        busStop = busStop,
-                        departureTime = departureTime,
-                        imageUrl = imageUrl
-                    )
-                }
-                onUpdate(buses)
+            val res = makeRequest("buses", "POST", json)
+            withContext(Dispatchers.Main) {
+                if (res != null) onSuccess() else onFailure(Exception("Failed to save bus"))
             }
         }
     }
 
-    // Delete Bus from Firestore
+    fun listenToBuses(
+        onUpdate: (List<Bus>) -> Unit,
+        onError: (Exception) -> Unit = {}
+    ) {
+        ioScope.launch {
+            while (isActive) {
+                val res = makeRequest("buses?select=*", "GET")
+                if (res != null) {
+                    try {
+                        val arr = JSONArray(res)
+                        val list = mutableListOf<Bus>()
+                        for (i in 0 until arr.length()) {
+                            val obj = arr.getJSONObject(i)
+                            list.add(
+                                Bus(
+                                    busId = obj.safeString("bus_id"),
+                                    busNumber = obj.safeString("bus_number"),
+                                    capacity = obj.optInt("capacity", 50),
+                                    status = obj.safeString("status", "Active"),
+                                    plateNumber = obj.safeString("plate_number"),
+                                    busType = obj.safeString("bus_type", "Air-conditioned"),
+                                    assignedDriver = obj.safeString("assigned_driver", "Unassigned"),
+                                    operator = obj.safeString("operator"),
+                                    route = obj.safeString("route"),
+                                    busStop = obj.safeString("bus_stop"),
+                                    departureTime = obj.safeString("departure_time", "08:00"),
+                                    imageUrl = obj.safeString("image_url")
+                                )
+                            )
+                        }
+                        withContext(Dispatchers.Main) { onUpdate(list) }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) { onError(e) }
+                    }
+                }
+                delay(5000)
+            }
+        }
+    }
+
     fun deleteBus(
         busId: String,
         onSuccess: () -> Unit = {},
         onFailure: (Exception) -> Unit = {}
     ) {
-        db.collection("buses").document(busId)
-            .delete()
-            .addOnSuccessListener { onSuccess() }
-            .addOnFailureListener { e -> onFailure(e) }
+        ioScope.launch {
+            val res = makeRequest("buses?bus_id=eq.$busId", "DELETE")
+            withContext(Dispatchers.Main) {
+                if (res != null || res == "") onSuccess() else onFailure(Exception("Failed to delete bus"))
+            }
+        }
     }
 
-    // Save or update Driver details in Firestore
+    // --- DRIVERS ---
     fun saveDriverDetails(
         driverId: String,
         driverName: String,
@@ -167,238 +317,336 @@ object DatabaseManager {
         onSuccess: () -> Unit = {},
         onFailure: (Exception) -> Unit = {}
     ) {
-        val driverData = hashMapOf(
-            "driverId" to driverId,
-            "driverName" to driverName,
-            "contactNumber" to contactNumber,
-            "licenseNumber" to licenseNumber,
-            "licenseExpiry" to licenseExpiry,
-            "assignedBus" to assignedBus,
-            "employmentStatus" to employmentStatus,
-            "email" to email,
-            "password" to password
-        )
-        db.collection("drivers").document(driverId)
-            .set(driverData)
-            .addOnSuccessListener {
-                if (email.isNotBlank() && password.isNotBlank()) {
-                    val driverUser = user(
-                        userId = driverId,
-                        fullname = driverName,
-                        email = email,
-                        password = password,
-                        role = "Driver"
-                    )
-                    saveUser(driverUser)
-                }
-                onSuccess()
+        ioScope.launch {
+            val existingRes = makeRequest("drivers?driver_id=eq.$driverId", "GET")
+            var finalEmail = email
+            var finalPass = password
+            if (existingRes != null) {
+                try {
+                    val arr = JSONArray(existingRes)
+                    if (arr.length() > 0) {
+                        val obj = arr.getJSONObject(0)
+                        if (finalEmail.isBlank()) {
+                            finalEmail = obj.safeString("email")
+                        }
+                        if (finalPass.isBlank()) {
+                            finalPass = obj.safeString("password")
+                        }
+                    }
+                } catch (_: Exception) {}
             }
-            .addOnFailureListener { e -> onFailure(e) }
-    }
 
-    // Real-time live listener for Drivers from Cloud Firestore
-    fun listenToDrivers(
-        onUpdate: (List<DriverRecord>) -> Unit,
-        onError: (Exception) -> Unit = {}
-    ) {
-        db.collection("drivers").addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                onError(error)
-                return@addSnapshotListener
-            }
-            if (snapshot != null) {
-                val drivers = snapshot.documents.mapNotNull { doc ->
-                    val driverId = doc.getString("driverId") ?: doc.id
-                    val driverName = doc.getString("driverName") ?: ""
-                    val contactNumber = doc.getString("contactNumber") ?: ""
-                    val licenseNumber = doc.getString("licenseNumber") ?: ""
-                    val licenseExpiry = doc.getString("licenseExpiry") ?: ""
-                    val assignedBus = doc.getString("assignedBus") ?: "Unassigned"
-                    val employmentStatus = doc.getString("employmentStatus") ?: "On Duty"
-                    val email = doc.getString("email") ?: ""
-                    val password = doc.getString("password") ?: ""
+            val json = JSONObject().apply {
+                put("driver_id", driverId)
+                put("driver_name", driverName)
+                put("contact_number", contactNumber)
+                put("license_number", licenseNumber)
+                put("license_expiry", licenseExpiry)
+                put("assigned_bus", assignedBus)
+                put("employment_status", employmentStatus)
+                put("email", finalEmail)
+                put("password", finalPass)
+            }.toString()
 
-                    DriverRecord(
-                        driverId = driverId,
-                        driverName = driverName,
-                        contactNumber = contactNumber,
-                        licenseNumber = licenseNumber,
-                        licenseExpiry = licenseExpiry,
-                        assignedBus = assignedBus,
-                        employmentStatus = employmentStatus,
-                        email = email,
-                        password = password
-                    )
+            try {
+                val url = URL("$SUPABASE_URL/drivers")
+                val connection = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    setRequestProperty("apikey", SUPABASE_KEY)
+                    setRequestProperty("Authorization", "Bearer $SUPABASE_KEY")
+                    setRequestProperty("Content-Type", "application/json")
+                    setRequestProperty("Prefer", "resolution=merge-duplicates,return=representation")
+                    doInput = true
+                    doOutput = true
                 }
-                onUpdate(drivers)
+
+                OutputStreamWriter(connection.outputStream).use { it.write(json) }
+                val responseCode = connection.responseCode
+                if (responseCode in 200..299) {
+                    if (finalEmail.isNotBlank() && finalPass.isNotBlank()) {
+                        val driverUser = user(driverId, driverName, finalEmail, "", "Driver")
+                        saveUser(driverUser)
+                    }
+                    withContext(Dispatchers.Main) { onSuccess() }
+                } else {
+                    val err = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: "Error $responseCode"
+                    Log.e("Supabase", "Save driver error: $err")
+                    withContext(Dispatchers.Main) { onFailure(Exception(err)) }
+                }
+            } catch (e: Exception) {
+                Log.e("Supabase", "Save driver exception: ${e.localizedMessage}", e)
+                withContext(Dispatchers.Main) { onFailure(e) }
             }
         }
     }
 
-    // Delete Driver from Firestore
+    fun listenToDrivers(
+        onUpdate: (List<DriverRecord>) -> Unit,
+        onError: (Exception) -> Unit = {}
+    ) {
+        ioScope.launch {
+            while (isActive) {
+                val res = makeRequest("drivers?select=*", "GET")
+                if (res != null) {
+                    try {
+                        val arr = JSONArray(res)
+                        val list = mutableListOf<DriverRecord>()
+                        for (i in 0 until arr.length()) {
+                            val obj = arr.getJSONObject(i)
+                            list.add(
+                                DriverRecord(
+                                    driverId = obj.safeString("driver_id"),
+                                    driverName = obj.safeString("driver_name"),
+                                    contactNumber = obj.safeString("contact_number"),
+                                    licenseNumber = obj.safeString("license_number"),
+                                    licenseExpiry = obj.safeString("license_expiry"),
+                                    assignedBus = obj.safeString("assigned_bus", "Unassigned"),
+                                    employmentStatus = obj.safeString("employment_status", "On Duty"),
+                                    email = obj.safeString("email"),
+                                    password = obj.safeString("password")
+                                )
+                            )
+                        }
+                        withContext(Dispatchers.Main) { onUpdate(list) }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) { onError(e) }
+                    }
+                }
+                delay(5000)
+            }
+        }
+    }
+
     fun deleteDriver(
         driverId: String,
         onSuccess: () -> Unit = {},
         onFailure: (Exception) -> Unit = {}
     ) {
-        db.collection("drivers").document(driverId)
-            .delete()
-            .addOnSuccessListener { onSuccess() }
-            .addOnFailureListener { e -> onFailure(e) }
+        ioScope.launch {
+            val res = makeRequest("drivers?driver_id=eq.$driverId", "DELETE")
+            withContext(Dispatchers.Main) {
+                if (res != null) onSuccess() else onFailure(Exception("Failed to delete driver"))
+            }
+        }
     }
 
-    // Save or update BusStop / Terminal Hub in Firestore
+    fun authenticateDriver(
+        identifier: String,
+        passwordInput: String,
+        onResult: (driver: DriverRecord?, errorMsg: String?) -> Unit
+    ) {
+        val cleanId = identifier.trim().lowercase()
+        val cleanPass = passwordInput.trim()
+        if (cleanId.isBlank()) {
+            onResult(null, "Please enter your Driver ID or Email")
+            return
+        }
+
+        ioScope.launch {
+            val res = makeRequest("drivers?select=*", "GET")
+            withContext(Dispatchers.Main) {
+                try {
+                    if (res != null) {
+                        val arr = JSONArray(res)
+                        var matchedDriver: DriverRecord? = null
+
+                        for (i in 0 until arr.length()) {
+                            val obj = arr.getJSONObject(i)
+                            val dId = obj.safeString("driver_id")
+                            val dName = obj.safeString("driver_name")
+                            val dEmail = obj.safeString("email")
+                            val dPass = obj.safeString("password")
+
+                            if (dId.trim().lowercase() == cleanId || dEmail.trim().lowercase() == cleanId || dName.trim().lowercase() == cleanId) {
+                                if (dPass.isBlank() || dPass.trim() == cleanPass) {
+                                    matchedDriver = DriverRecord(
+                                        driverId = dId,
+                                        driverName = dName,
+                                        contactNumber = obj.safeString("contact_number"),
+                                        licenseNumber = obj.safeString("license_number"),
+                                        licenseExpiry = obj.safeString("license_expiry"),
+                                        assignedBus = obj.safeString("assigned_bus", "Unassigned"),
+                                        employmentStatus = obj.safeString("employment_status", "On Duty"),
+                                        email = dEmail,
+                                        password = dPass
+                                    )
+                                    break
+                                }
+                            }
+                        }
+
+                        if (matchedDriver != null) {
+                            onResult(matchedDriver, null)
+                        } else {
+                            onResult(null, "Invalid Driver ID / Email or Password")
+                        }
+                    } else {
+                        onResult(null, "Failed to connect to database")
+                    }
+                } catch (e: Exception) {
+                    onResult(null, e.localizedMessage ?: "Authentication error")
+                }
+            }
+        }
+    }
+
+    // --- BUS STOPS ---
     fun saveBusStop(
         stop: BusStop,
         onSuccess: () -> Unit = {},
         onFailure: (Exception) -> Unit = {}
     ) {
-        val stopData = hashMapOf(
-            "stopId" to stop.stopId,
-            "stopName" to stop.stopName,
-            "location" to stop.location,
-            "latitude" to stop.latitude,
-            "longitude" to stop.longitude,
-            "baysCount" to stop.baysCount,
-            "activeBays" to stop.activeBays,
-            "operatingHours" to stop.operatingHours,
-            "status" to stop.status,
-            "imageUrl" to stop.imageUrl
-        )
-        db.collection("bus_stops").document(stop.stopId)
-            .set(stopData)
-            .addOnSuccessListener { onSuccess() }
-            .addOnFailureListener { e -> onFailure(e) }
-    }
+        ioScope.launch {
+            val json = JSONObject().apply {
+                put("stop_id", stop.stopId)
+                put("stop_name", stop.stopName)
+                put("location", stop.location)
+                put("latitude", stop.latitude)
+                put("longitude", stop.longitude)
+                put("bays_count", stop.baysCount)
+                put("active_bays", stop.activeBays)
+                put("operating_hours", stop.operatingHours)
+                put("status", stop.status)
+                put("image_url", stop.imageUrl)
+            }.toString()
 
-    // Real-time live listener for BusStops / Terminal Hubs from Cloud Firestore
-    fun listenToBusStops(
-        onUpdate: (List<BusStop>) -> Unit,
-        onError: (Exception) -> Unit = {}
-    ) {
-        db.collection("bus_stops").addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                onError(error)
-                return@addSnapshotListener
-            }
-            if (snapshot != null) {
-                val stops = snapshot.documents.mapNotNull { doc ->
-                    val stopId = doc.getString("stopId") ?: doc.id
-                    val stopName = doc.getString("stopName") ?: ""
-                    val location = doc.getString("location") ?: ""
-                    val latitude = doc.getDouble("latitude") ?: 14.5995
-                    val longitude = doc.getDouble("longitude") ?: 120.9842
-                    val baysCount = (doc.getLong("baysCount") ?: 8L).toInt()
-                    val activeBays = (doc.getLong("activeBays") ?: 5L).toInt()
-                    val operatingHours = doc.getString("operatingHours") ?: "04:00 AM - 11:00 PM"
-                    val status = doc.getString("status") ?: "Active"
-                    val imageUrl = doc.getString("imageUrl") ?: ""
-
-                    BusStop(
-                        stopId = stopId,
-                        stopName = stopName,
-                        location = location,
-                        latitude = latitude,
-                        longitude = longitude,
-                        baysCount = baysCount,
-                        activeBays = activeBays,
-                        operatingHours = operatingHours,
-                        status = status,
-                        imageUrl = imageUrl
-                    )
-                }
-                onUpdate(stops)
+            val res = makeRequest("bus_stops", "POST", json)
+            withContext(Dispatchers.Main) {
+                if (res != null) onSuccess() else onFailure(Exception("Failed to save bus stop"))
             }
         }
     }
 
-    // Delete BusStop / Terminal Hub from Firestore
+    fun listenToBusStops(
+        onUpdate: (List<BusStop>) -> Unit,
+        onError: (Exception) -> Unit = {}
+    ) {
+        ioScope.launch {
+            while (isActive) {
+                val res = makeRequest("bus_stops?select=*", "GET")
+                if (res != null) {
+                    try {
+                        val arr = JSONArray(res)
+                        val list = mutableListOf<BusStop>()
+                        for (i in 0 until arr.length()) {
+                            val obj = arr.getJSONObject(i)
+                            list.add(
+                                BusStop(
+                                    stopId = obj.safeString("stop_id"),
+                                    stopName = obj.safeString("stop_name"),
+                                    location = obj.safeString("location"),
+                                    latitude = obj.optDouble("latitude", 14.5995),
+                                    longitude = obj.optDouble("longitude", 120.9842),
+                                    baysCount = obj.optInt("bays_count", 8),
+                                    activeBays = obj.optInt("active_bays", 5),
+                                    operatingHours = obj.safeString("operating_hours", "04:00 AM - 11:00 PM"),
+                                    status = obj.safeString("status", "Active"),
+                                    imageUrl = obj.safeString("image_url")
+                                )
+                            )
+                        }
+                        withContext(Dispatchers.Main) { onUpdate(list) }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) { onError(e) }
+                    }
+                }
+                delay(5000)
+            }
+        }
+    }
+
     fun deleteBusStop(
         stopId: String,
         onSuccess: () -> Unit = {},
         onFailure: (Exception) -> Unit = {}
     ) {
-        db.collection("bus_stops").document(stopId)
-            .delete()
-            .addOnSuccessListener { onSuccess() }
-            .addOnFailureListener { e -> onFailure(e) }
+        ioScope.launch {
+            val res = makeRequest("bus_stops?stop_id=eq.$stopId", "DELETE")
+            withContext(Dispatchers.Main) {
+                if (res != null) onSuccess() else onFailure(Exception("Failed to delete bus stop"))
+            }
+        }
     }
 
-    // Save or update BusRoute in Firestore
+    // --- BUS ROUTES ---
     fun saveBusRoute(
         route: BusRoute,
         onSuccess: () -> Unit = {},
         onFailure: (Exception) -> Unit = {}
     ) {
-        val routeData = hashMapOf(
-            "routeId" to route.routeId,
-            "routeName" to route.routeName,
-            "startPoint" to route.startPoint,
-            "destination" to route.destination,
-            "status" to route.status,
-            "startLat" to route.startLat,
-            "startLng" to route.startLng,
-            "destLat" to route.destLat,
-            "destLng" to route.destLng
-        )
-        db.collection("bus_routes").document(route.routeId)
-            .set(routeData)
-            .addOnSuccessListener { onSuccess() }
-            .addOnFailureListener { e -> onFailure(e) }
-    }
+        ioScope.launch {
+            val json = JSONObject().apply {
+                put("route_id", route.routeId)
+                put("route_name", route.routeName)
+                put("start_point", route.startPoint)
+                put("destination", route.destination)
+                put("status", route.status)
+                put("start_lat", route.startLat)
+                put("start_lng", route.startLng)
+                put("dest_lat", route.destLat)
+                put("dest_lng", route.destLng)
+                put("fare", route.fare)
+            }.toString()
 
-    // Real-time live listener for Routes from Cloud Firestore
-    fun listenToRoutes(
-        onUpdate: (List<BusRoute>) -> Unit,
-        onError: (Exception) -> Unit = {}
-    ) {
-        db.collection("bus_routes").addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                onError(error)
-                return@addSnapshotListener
-            }
-            if (snapshot != null) {
-                val routes = snapshot.documents.mapNotNull { doc ->
-                    val routeId = doc.getString("routeId") ?: doc.id
-                    val routeName = doc.getString("routeName") ?: ""
-                    val startPoint = doc.getString("startPoint") ?: ""
-                    val destination = doc.getString("destination") ?: ""
-                    val status = doc.getString("status") ?: "Active"
-                    val startLat = doc.getDouble("startLat") ?: 0.0
-                    val startLng = doc.getDouble("startLng") ?: 0.0
-                    val destLat = doc.getDouble("destLat") ?: 0.0
-                    val destLng = doc.getDouble("destLng") ?: 0.0
-
-                    BusRoute(
-                        routeId = routeId,
-                        routeName = routeName,
-                        startPoint = startPoint,
-                        destination = destination,
-                        status = status,
-                        startLat = startLat,
-                        startLng = startLng,
-                        destLat = destLat,
-                        destLng = destLng
-                    )
-                }
-                onUpdate(routes)
+            val res = makeRequest("bus_routes", "POST", json)
+            withContext(Dispatchers.Main) {
+                if (res != null) onSuccess() else onFailure(Exception("Failed to save route"))
             }
         }
     }
 
-    // Delete Bus Route from Firestore
+    fun listenToRoutes(
+        onUpdate: (List<BusRoute>) -> Unit,
+        onError: (Exception) -> Unit = {}
+    ) {
+        ioScope.launch {
+            while (isActive) {
+                val res = makeRequest("bus_routes?select=*", "GET")
+                if (res != null) {
+                    try {
+                        val arr = JSONArray(res)
+                        val list = mutableListOf<BusRoute>()
+                        for (i in 0 until arr.length()) {
+                            val obj = arr.getJSONObject(i)
+                            list.add(
+                                BusRoute(
+                                    routeId = obj.safeString("route_id"),
+                                    routeName = obj.safeString("route_name"),
+                                    startPoint = obj.safeString("start_point"),
+                                    destination = obj.safeString("destination"),
+                                    status = obj.safeString("status", "Active"),
+                                    startLat = obj.optDouble("start_lat", 0.0),
+                                    startLng = obj.optDouble("start_lng", 0.0),
+                                    destLat = obj.optDouble("dest_lat", 0.0),
+                                    destLng = obj.optDouble("dest_lng", 0.0),
+                                    fare = obj.optDouble("fare", 0.0)
+                                )
+                            )
+                        }
+                        withContext(Dispatchers.Main) { onUpdate(list) }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) { onError(e) }
+                    }
+                }
+                delay(5000)
+            }
+        }
+    }
+
     fun deleteBusRoute(
         routeId: String,
         onSuccess: () -> Unit = {},
         onFailure: (Exception) -> Unit = {}
     ) {
-        db.collection("bus_routes").document(routeId)
-            .delete()
-            .addOnSuccessListener { onSuccess() }
-            .addOnFailureListener { e -> onFailure(e) }
+        ioScope.launch {
+            val res = makeRequest("bus_routes?route_id=eq.$routeId", "DELETE")
+            withContext(Dispatchers.Main) {
+                if (res != null) onSuccess() else onFailure(Exception("Failed to delete route"))
+            }
+        }
     }
 
-   
+    // --- BUS SCHEDULES ---
     fun saveBusSchedule(
         schedule: BusSchedule,
         driverName: String = "",
@@ -406,78 +654,88 @@ object DatabaseManager {
         onSuccess: () -> Unit = {},
         onFailure: (Exception) -> Unit = {}
     ) {
-        val scheduleData = hashMapOf(
-            "scheduleId" to schedule.scheduleId,
-            "busNumber" to schedule.bus.busNumber,
-            "routeName" to schedule.route.routeName,
-            "driverName" to if (driverName.isNotBlank()) driverName else schedule.bus.assignedDriver,
-            "departureTime" to schedule.departureTime,
-            "arrivalTime" to schedule.arrivalTime,
-            "status" to schedule.status,
-            "scheduleDate" to scheduleDate
-        )
-        db.collection("bus_schedules").document(schedule.scheduleId)
-            .set(scheduleData)
-            .addOnSuccessListener { onSuccess() }
-            .addOnFailureListener { e -> onFailure(e) }
-    }
+        ioScope.launch {
+            val resolvedDriver = if (driverName.isNotBlank()) driverName else schedule.bus.assignedDriver
+            val json = JSONObject().apply {
+                put("schedule_id", schedule.scheduleId)
+                put("bus_number", schedule.bus.busNumber)
+                put("route_name", schedule.route.routeName)
+                put("driver_name", resolvedDriver)
+                put("departure_time", schedule.departureTime)
+                put("arrival_time", schedule.arrivalTime)
+                put("status", schedule.status)
+                put("schedule_date", scheduleDate)
+            }.toString()
 
-    // Real-time live listener for Schedules from Cloud Firestore
-    fun listenToSchedules(
-        onUpdate: (List<BusSchedule>) -> Unit,
-        onError: (Exception) -> Unit = {}
-    ) {
-        db.collection("bus_schedules").addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                onError(error)
-                return@addSnapshotListener
-            }
-            if (snapshot != null) {
-                val schedules = snapshot.documents.mapNotNull { doc ->
-                    val scheduleId = doc.getString("scheduleId") ?: doc.id
-                    val busNumber = doc.getString("busNumber") ?: "BUS-001"
-                    val routeName = doc.getString("routeName") ?: "City Terminal ➔ Airport Hub"
-                    val driverName = doc.getString("driverName") ?: "Unassigned"
-                    val departureTime = doc.getString("departureTime") ?: "10:00 AM"
-                    val arrivalTime = doc.getString("arrivalTime") ?: "01:30 PM"
-                    val status = doc.getString("status") ?: "Scheduled"
-                    val scheduleDate = doc.getString("scheduleDate") ?: ""
-
-                    val startP = if (routeName.contains(" ➔ ")) {
-                        routeName.split(" ➔ ")[0].replace(Regex("""^Route\s+[A-Za-z0-9-]+:\s*""", RegexOption.IGNORE_CASE), "").trim()
-                    } else "Central Terminal"
-
-                    val destP = if (routeName.contains(" ➔ ")) {
-                        routeName.split(" ➔ ")[1].trim()
-                    } else "Airport Hub"
-
-                    val busObj = Bus(scheduleId, busNumber, 50, status)
-                    busObj.assignedDriver = driverName
-                    busObj.operator = scheduleDate
-
-                    val routeObj = BusRoute("R01", routeName, startP, destP)
-                    val scheduleObj = BusSchedule(scheduleId, busObj, routeObj, departureTime, arrivalTime)
-                    scheduleObj.status = status
-                    scheduleObj
-                }
-                onUpdate(schedules)
+            val res = makeRequest("bus_schedules", "POST", json)
+            withContext(Dispatchers.Main) {
+                if (res != null) onSuccess() else onFailure(Exception("Failed to save schedule"))
             }
         }
     }
 
-    // Delete Bus Schedule from Firestore
+    fun listenToSchedules(
+        onUpdate: (List<BusSchedule>) -> Unit,
+        onError: (Exception) -> Unit = {}
+    ) {
+        ioScope.launch {
+            while (isActive) {
+                val res = makeRequest("bus_schedules?select=*", "GET")
+                if (res != null) {
+                    try {
+                        val arr = JSONArray(res)
+                        val list = mutableListOf<BusSchedule>()
+                        for (i in 0 until arr.length()) {
+                            val obj = arr.getJSONObject(i)
+                            val scheduleId = obj.safeString("schedule_id")
+                            val busNumber = obj.safeString("bus_number", "BUS-001")
+                            val routeName = obj.safeString("route_name", "City Terminal ➔ Airport Hub")
+                            val driverName = obj.safeString("driver_name", "Unassigned")
+                            val departureTime = obj.safeString("departure_time", "10:00 AM")
+                            val arrivalTime = obj.safeString("arrival_time", "01:30 PM")
+                            val status = obj.safeString("status", "Scheduled")
+                            val scheduleDate = obj.safeString("schedule_date", "")
+
+                            val startP = if (routeName.contains(" ➔ ")) {
+                                routeName.split(" ➔ ")[0].trim()
+                            } else "Central Terminal"
+
+                            val destP = if (routeName.contains(" ➔ ")) {
+                                routeName.split(" ➔ ")[1].trim()
+                            } else "Airport Hub"
+
+                            val busObj = Bus(scheduleId, busNumber, 50, status)
+                            busObj.assignedDriver = driverName
+                            busObj.operator = scheduleDate
+
+                            val routeObj = BusRoute("R01", routeName, startP, destP)
+                            val scheduleObj = BusSchedule(scheduleId, busObj, routeObj, departureTime, arrivalTime)
+                            scheduleObj.status = status
+                            list.add(scheduleObj)
+                        }
+                        withContext(Dispatchers.Main) { onUpdate(list) }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) { onError(e) }
+                    }
+                }
+                delay(5000)
+            }
+        }
+    }
+
     fun deleteBusSchedule(
         scheduleId: String,
         onSuccess: () -> Unit = {},
         onFailure: (Exception) -> Unit = {}
     ) {
-        db.collection("bus_schedules").document(scheduleId)
-            .delete()
-            .addOnSuccessListener { onSuccess() }
-            .addOnFailureListener { e -> onFailure(e) }
+        ioScope.launch {
+            val res = makeRequest("bus_schedules?schedule_id=eq.$scheduleId", "DELETE")
+            withContext(Dispatchers.Main) {
+                if (res != null) onSuccess() else onFailure(Exception("Failed to delete schedule"))
+            }
+        }
     }
 
-    // Update schedule status (Accepted, Rejected, In Transit, Completed) in Cloud Firestore
     fun updateScheduleStatus(
         scheduleId: String,
         newStatus: String,
@@ -485,30 +743,177 @@ object DatabaseManager {
         onSuccess: () -> Unit = {},
         onFailure: (Exception) -> Unit = {}
     ) {
-        val updates = hashMapOf<String, Any>(
-            "status" to newStatus
-        )
-        if (driverName.isNotBlank()) {
-            updates["driverName"] = driverName
+        ioScope.launch {
+            val jsonObj = JSONObject().apply {
+                put("status", newStatus)
+                if (driverName.isNotBlank()) {
+                    put("driver_name", driverName)
+                }
+            }.toString()
+
+            val res = makeRequest("bus_schedules?schedule_id=eq.$scheduleId", "PATCH", jsonObj)
+            withContext(Dispatchers.Main) {
+                if (res != null) onSuccess() else onFailure(Exception("Failed to update status"))
+            }
         }
-        db.collection("bus_schedules").document(scheduleId)
-            .update(updates)
-            .addOnSuccessListener { onSuccess() }
-            .addOnFailureListener { e -> onFailure(e) }
     }
 
-    // Save all sample OOP objects at once
-    fun saveAllSampleData(
+    fun authenticateUser(
+        emailInput: String,
+        passwordInput: String,
+        onResult: (user: user?, errorMsg: String?) -> Unit
+    ) {
+        val cleanEmail = emailInput.trim().lowercase()
+        val cleanPass = passwordInput.trim()
+        if (cleanEmail.isBlank()) {
+            onResult(null, "Please enter your email")
+            return
+        }
+
+        ioScope.launch {
+            val res = makeRequest("users?select=*", "GET")
+            withContext(Dispatchers.Main) {
+                try {
+                    if (res != null) {
+                        val arr = JSONArray(res)
+                        var foundUser: user? = null
+
+                        for (i in 0 until arr.length()) {
+                            val obj = arr.getJSONObject(i)
+                            val uEmail = obj.safeString("email")
+                            val uPass = obj.safeString("password")
+
+                            if (uEmail.trim().lowercase() == cleanEmail) {
+                                if (uPass.isBlank() || uPass == cleanPass) {
+                                    foundUser = user(
+                                        userId = obj.safeString("user_id"),
+                                        fullname = obj.safeString("fullname", "Transit User"),
+                                        email = uEmail,
+                                        password = uPass,
+                                        role = obj.safeString("role", "Passenger")
+                                    )
+                                    break
+                                }
+                            }
+                        }
+
+                        if (foundUser != null) {
+                            onResult(foundUser, null)
+                        } else {
+                            onResult(null, "Invalid email or password / Account not found")
+                        }
+                    } else {
+                        onResult(null, "Failed to connect to database")
+                    }
+                } catch (e: Exception) {
+                    onResult(null, e.localizedMessage ?: "Authentication failed")
+                }
+            }
+        }
+    }
+
+    // --- CONDUCTORS ---
+    fun saveConductor(
+        conductor: ConductorRecord,
         onSuccess: () -> Unit = {},
         onFailure: (Exception) -> Unit = {}
     ) {
-        val sampleUser = user("U002", "Juan Dela Cruz", "juan@example.com", "pass123", "Passenger")
-        val sampleStop = BusStop("S001", "Central Terminal", "Manila", 14.5995, 120.9842)
-        val sampleRoute = BusRoute("R001", "Manila Route", "Central Manila", "City Center")
-        sampleRoute.addBusStop(sampleStop)
+        ioScope.launch {
+            val json = JSONObject().apply {
+                put("id", conductor.id)
+                put("full_name", conductor.fullName)
+                put("employee_id", conductor.employeeId)
+                put("phone_number", conductor.phoneNumber)
+                put("email", conductor.email)
+                put("username", conductor.username)
+                put("role", conductor.role)
+                if (conductor.assignedBusId.isNotBlank()) {
+                    put("assigned_bus_id", conductor.assignedBusId)
+                }
+                put("status", conductor.status)
+                put("password", conductor.password)
+            }.toString()
 
-        saveUser(sampleUser)
-        saveBusStop(sampleStop)
-        saveBusRoute(sampleRoute, onSuccess = onSuccess, onFailure = onFailure)
+            try {
+                val url = URL("$SUPABASE_URL/conductors")
+                val connection = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    setRequestProperty("apikey", SUPABASE_KEY)
+                    setRequestProperty("Authorization", "Bearer $SUPABASE_KEY")
+                    setRequestProperty("Content-Type", "application/json")
+                    setRequestProperty("Prefer", "resolution=merge-duplicates,return=representation")
+                    doInput = true
+                    doOutput = true
+                }
+
+                OutputStreamWriter(connection.outputStream).use { it.write(json) }
+                val responseCode = connection.responseCode
+                if (responseCode in 200..299) {
+                    if (conductor.email.isNotBlank()) {
+                        val conductorUser = user(conductor.id, conductor.fullName, conductor.email, conductor.password, "Conductor")
+                        saveUser(conductorUser)
+                    }
+                    withContext(Dispatchers.Main) { onSuccess() }
+                } else {
+                    val err = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: "Error $responseCode"
+                    Log.e("Supabase", "Save conductor error: $err")
+                    withContext(Dispatchers.Main) { onFailure(Exception(err)) }
+                }
+            } catch (e: Exception) {
+                Log.e("Supabase", "Save conductor exception: ${e.localizedMessage}", e)
+                withContext(Dispatchers.Main) { onFailure(e) }
+            }
+        }
+    }
+
+    fun listenToConductors(
+        onUpdate: (List<ConductorRecord>) -> Unit,
+        onError: (Exception) -> Unit = {}
+    ) {
+        ioScope.launch {
+            while (isActive) {
+                val res = makeRequest("conductors?select=*", "GET")
+                if (res != null) {
+                    try {
+                        val arr = JSONArray(res)
+                        val list = mutableListOf<ConductorRecord>()
+                        for (i in 0 until arr.length()) {
+                            val obj = arr.getJSONObject(i)
+                            list.add(
+                                ConductorRecord(
+                                    id = obj.safeString("id"),
+                                    fullName = obj.safeString("full_name"),
+                                    employeeId = obj.safeString("employee_id"),
+                                    phoneNumber = obj.safeString("phone_number"),
+                                    email = obj.safeString("email"),
+                                    username = obj.safeString("username"),
+                                    role = obj.safeString("role", "Conductor"),
+                                    assignedBusId = obj.safeString("assigned_bus_id"),
+                                    status = obj.safeString("status", "On Duty"),
+                                    password = obj.safeString("password", "password123")
+                                )
+                            )
+                        }
+                        withContext(Dispatchers.Main) { onUpdate(list) }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) { onError(e) }
+                    }
+                }
+                delay(5000)
+            }
+        }
+    }
+
+    fun deleteConductor(
+        id: String,
+        onSuccess: () -> Unit = {},
+        onFailure: (Exception) -> Unit = {}
+    ) {
+        ioScope.launch {
+            val res = makeRequest("conductors?id=eq.$id", "DELETE")
+            withContext(Dispatchers.Main) {
+                if (res != null) onSuccess() else onFailure(Exception("Failed to delete conductor"))
+            }
+        }
     }
 }

@@ -30,8 +30,8 @@ import androidx.credentials.GetCredentialRequest
 import com.example.myfirstapp.ui.theme.MyFirstAppTheme
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.GoogleAuthProvider
+
+
 import kotlinx.coroutines.launch
 
 @Composable
@@ -43,7 +43,6 @@ fun LoginScreen(
     val coroutineScope = rememberCoroutineScope()
     val prefs = remember { context.getSharedPreferences("TransitGoPrefs", Context.MODE_PRIVATE) }
 
-    var selectedRole by remember { mutableStateOf("Passenger") }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
@@ -78,8 +77,6 @@ fun LoginScreen(
         }
     }
 
-    val roles = listOf("Passenger", "Staff", "Driver")
-
     val textFieldColors = OutlinedTextFieldDefaults.colors(
         focusedTextColor = Color.Black,
         unfocusedTextColor = Color.Black,
@@ -91,16 +88,6 @@ fun LoginScreen(
         unfocusedBorderColor = Color.LightGray
     )
 
-    // Pre-registered demo user for testing authentication
-    val demoUser = remember {
-        user(
-            userId = "U001",
-            fullname = "Juan Dela Cruz",
-            email = "juan@example.com",
-            password = "pass123",
-            role = "Passenger"
-        )
-    }
 
     Box(
         modifier = Modifier
@@ -144,41 +131,7 @@ fun LoginScreen(
                     )
                 }
 
-                if (selectedRole != "Passenger") {
-                    Text(
-                        text = selectedRole,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = Color.Gray,
-                        modifier = Modifier.padding(top = 2.dp)
-                    )
-                }
 
-                Spacer(modifier = Modifier.height(20.dp))
-
-                // Role Selector Tabs (Passenger | Staff | Driver)
-                SingleChoiceSegmentedButtonRow(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    roles.forEachIndexed { index, role ->
-                        SegmentedButton(
-                            selected = selectedRole == role,
-                            onClick = {
-                                selectedRole = role
-                                errorMessage = ""
-                            },
-                            shape = SegmentedButtonDefaults.itemShape(index = index, count = roles.size),
-                            colors = SegmentedButtonDefaults.colors(
-                                activeContainerColor = TransitGreen,
-                                activeContentColor = Color.White,
-                                inactiveContainerColor = Color(0xFFF0F4F1),
-                                inactiveContentColor = Color.DarkGray
-                            )
-                        ) {
-                            Text(text = role, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-                }
 
                 Spacer(modifier = Modifier.height(20.dp))
 
@@ -189,15 +142,7 @@ fun LoginScreen(
                         email = it
                         errorMessage = ""
                     },
-                    label = {
-                        Text(
-                            when (selectedRole) {
-                                "Driver" -> "Driver ID / Email"
-                                "Staff" -> "Staff ID / Email"
-                                else -> "Email Address"
-                            }
-                        )
-                    },
+                    label = { Text("Email Address or ID") },
                     singleLine = true,
                     colors = textFieldColors,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
@@ -267,59 +212,51 @@ fun LoginScreen(
                         when {
                             email.isBlank() -> errorMessage = "Please enter your email or ID"
                             password.isBlank() -> errorMessage = "Please enter your password"
-                            email.trim().equals(demoUser.email, ignoreCase = true) && demoUser.verifyPassword(password) -> {
-                                errorMessage = ""
-                                saveOrClearCredentials()
-                                onLoginSuccess(demoUser)
-                            }
                             else -> {
                                 isLoading = true
-                                FirebaseAuth.getInstance()
-                                    .signInWithEmailAndPassword(email.trim(), password)
-                                    .addOnSuccessListener { authResult ->
-                                        val firebaseUser = authResult.user
-                                        val uid = firebaseUser?.uid ?: ""
+                                val trimmedInput = email.trim()
+                                val trimmedPass = password.trim()
 
-                                        DatabaseManager.getUser(
-                                            userId = uid,
-                                            onSuccess = { fetchedUser ->
-                                                isLoading = false
-                                                saveOrClearCredentials()
+                                DatabaseManager.authenticateDriver(
+                                    identifier = trimmedInput,
+                                    passwordInput = trimmedPass,
+                                    onResult = { matchedDriver, _ ->
+                                        if (matchedDriver != null) {
+                                            isLoading = false
+                                            errorMessage = ""
+                                            saveOrClearCredentials()
 
-                                                val actualRole = fetchedUser?.role ?: selectedRole
-                                                val actualName = fetchedUser?.fullname?.ifBlank { firebaseUser?.displayName }
-                                                    ?: (firebaseUser?.displayName ?: "Transit User")
+                                            val loggedInDriver = user(
+                                                userId = matchedDriver.driverId,
+                                                fullname = matchedDriver.driverName,
+                                                email = matchedDriver.email.ifBlank { "${matchedDriver.driverId.lowercase()}@transitgo.com" },
+                                                password = matchedDriver.password.ifBlank { trimmedPass },
+                                                role = "Driver"
+                                            )
 
-                                                val loggedIn = user(
-                                                    userId = if (uid.isNotBlank()) uid else "U_${System.currentTimeMillis()}",
-                                                    fullname = actualName,
-                                                    email = firebaseUser?.email ?: email,
-                                                    password = password,
-                                                    role = actualRole
-                                                )
-
-                                                DatabaseManager.saveUser(loggedIn)
-                                                Toast.makeText(context, "Logged in as $actualRole ($actualName)", Toast.LENGTH_SHORT).show()
-                                                onLoginSuccess(loggedIn)
-                                            },
-                                            onFailure = {
-                                                isLoading = false
-                                                saveOrClearCredentials()
-                                                val loggedIn = user(
-                                                    userId = if (uid.isNotBlank()) uid else "U_${System.currentTimeMillis()}",
-                                                    fullname = firebaseUser?.displayName ?: "Transit User",
-                                                    email = firebaseUser?.email ?: email,
-                                                    password = password,
-                                                    role = selectedRole
-                                                )
-                                                onLoginSuccess(loggedIn)
-                                            }
-                                        )
+                                            DatabaseManager.saveUser(loggedInDriver)
+                                            Toast.makeText(context, "Logged in as Driver (${matchedDriver.driverName})", Toast.LENGTH_SHORT).show()
+                                            onLoginSuccess(loggedInDriver)
+                                        } else {
+                                            DatabaseManager.authenticateUser(
+                                                emailInput = trimmedInput,
+                                                passwordInput = trimmedPass,
+                                                onResult = { userObj, errorMsg ->
+                                                    isLoading = false
+                                                    if (userObj != null) {
+                                                        errorMessage = ""
+                                                        saveOrClearCredentials()
+                                                        DatabaseManager.saveUser(userObj)
+                                                        Toast.makeText(context, "Logged in as ${userObj.role} (${userObj.fullname})", Toast.LENGTH_SHORT).show()
+                                                        onLoginSuccess(userObj)
+                                                    } else {
+                                                        errorMessage = errorMsg ?: "Invalid email or password / Account not found"
+                                                    }
+                                                }
+                                            )
+                                        }
                                     }
-                                    .addOnFailureListener { e ->
-                                        isLoading = false
-                                        errorMessage = e.localizedMessage ?: "Invalid email or password"
-                                    }
+                                )
                             }
                         }
                     },
@@ -333,42 +270,36 @@ fun LoginScreen(
                         CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
                     } else {
                         Text(
-                            text = when (selectedRole) {
-                                "Driver" -> "Login as Driver"
-                                "Staff" -> "Login as Staff"
-                                else -> "Login"
-                            },
+                            text = "Log In",
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
                 }
 
-                // CONDITIONAL: Continue with Google is ONLY shown when Passenger is selected!
-                if (selectedRole == "Passenger") {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        HorizontalDivider(modifier = Modifier.weight(1f))
-                        Text(
-                            text = " OR ",
-                            fontSize = 12.sp,
-                            color = Color.Gray
-                        )
-                        HorizontalDivider(modifier = Modifier.weight(1f))
-                    }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    HorizontalDivider(modifier = Modifier.weight(1f))
+                    Text(
+                        text = " OR ",
+                        fontSize = 12.sp,
+                        color = Color.Gray
+                    )
+                    HorizontalDivider(modifier = Modifier.weight(1f))
+                }
 
-                    // Continue with Google Button (Passengers Only)
-                    OutlinedButton(
-                        onClick = {
-                            coroutineScope.launch {
-                                isLoading = true
-                                try {
-                                    val credentialManager = CredentialManager.create(context)
-                                    val webClientId = "724670809540-c747p8sju0tgtpo89l67gubo06k5t12b.apps.googleusercontent.com"
+                // Continue with Google Button (Commuters / Passengers)
+                OutlinedButton(
+                    onClick = {
+                        coroutineScope.launch {
+                            isLoading = true
+                            try {
+                                val credentialManager = CredentialManager.create(context)
+                                val webClientId = "724670809540-c747p8sju0tgtpo89l67gubo06k5t12b.apps.googleusercontent.com"
 
                                     val googleIdOption = GetGoogleIdOption.Builder()
                                         .setFilterByAuthorizedAccounts(false)
@@ -381,55 +312,39 @@ fun LoginScreen(
 
                                     val result = credentialManager.getCredential(context, request)
                                     val googleIdTokenCredential = GoogleIdTokenCredential.createFrom(result.credential.data)
-                                    val credential = GoogleAuthProvider.getCredential(googleIdTokenCredential.idToken, null)
+                                    val emailId = googleIdTokenCredential.id.ifBlank { "passenger@gmail.com" }
+                                    val name = googleIdTokenCredential.displayName ?: "Google Passenger"
+                                    val uid = googleIdTokenCredential.id.ifBlank { "G001" }
 
-                                    FirebaseAuth.getInstance().signInWithCredential(credential)
-                                        .addOnSuccessListener { authResult ->
-                                            val firebaseUser = authResult.user
-                                            val uid = firebaseUser?.uid ?: ""
-
-                                            DatabaseManager.getUser(
-                                                userId = uid,
-                                                onSuccess = { fetchedUser ->
-                                                    isLoading = false
-                                                    saveOrClearCredentials()
-                                                    val authenticatedUser = user(
-                                                        userId = if (uid.isNotBlank()) uid else "G001",
-                                                        fullname = fetchedUser?.fullname?.ifBlank { firebaseUser?.displayName } ?: (firebaseUser?.displayName ?: "Google Passenger"),
-                                                        email = firebaseUser?.email ?: "passenger@gmail.com",
-                                                        password = "",
-                                                        role = fetchedUser?.role ?: "Passenger"
-                                                    )
-                                                    DatabaseManager.saveUser(authenticatedUser)
-                                                    onLoginSuccess(authenticatedUser)
-                                                },
-                                                onFailure = {
-                                                    isLoading = false
-                                                    saveOrClearCredentials()
-                                                    val authenticatedUser = user(
-                                                        userId = if (uid.isNotBlank()) uid else "G001",
-                                                        fullname = firebaseUser?.displayName ?: "Google Passenger",
-                                                        email = firebaseUser?.email ?: "passenger@gmail.com",
-                                                        password = "",
-                                                        role = "Passenger"
-                                                    )
-                                                    DatabaseManager.saveUser(authenticatedUser)
-                                                    onLoginSuccess(authenticatedUser)
-                                                }
-                                            )
-                                        }
-                                        .addOnFailureListener {
+                                    DatabaseManager.getUser(
+                                        userId = uid,
+                                        onSuccess = { fetchedUser ->
                                             isLoading = false
-                                            val googleUser = user(
-                                                userId = "G001",
-                                                fullname = "Google Passenger",
-                                                email = "passenger@gmail.com",
+                                            saveOrClearCredentials()
+                                            val authenticatedUser = user(
+                                                userId = uid,
+                                                fullname = fetchedUser?.fullname?.ifBlank { name } ?: name,
+                                                email = emailId,
+                                                password = "",
+                                                role = fetchedUser?.role ?: "Passenger"
+                                            )
+                                            DatabaseManager.saveUser(authenticatedUser)
+                                            onLoginSuccess(authenticatedUser)
+                                        },
+                                        onFailure = {
+                                            isLoading = false
+                                            saveOrClearCredentials()
+                                            val authenticatedUser = user(
+                                                userId = uid,
+                                                fullname = name,
+                                                email = emailId,
                                                 password = "",
                                                 role = "Passenger"
                                             )
-                                            saveOrClearCredentials()
-                                            onLoginSuccess(googleUser)
+                                            DatabaseManager.saveUser(authenticatedUser)
+                                            onLoginSuccess(authenticatedUser)
                                         }
+                                    )
                                 } catch (_: Exception) {
                                     isLoading = false
                                     val googleUser = user(
@@ -477,9 +392,8 @@ fun LoginScreen(
                             )
                         }
                     }
-                }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Don't have an account? ", fontSize = 13.sp, color = Color.Gray)

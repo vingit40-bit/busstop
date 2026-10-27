@@ -11,7 +11,7 @@ import androidx.compose.material.icons.automirrored.filled.AltRoute
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.DirectionsBus
-import androidx.compose.material.icons.filled.LocationOn
+
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
@@ -28,7 +28,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.myfirstapp.DatabaseManager
 import com.example.myfirstapp.user
 
 val AdminGreen = Color(0xFF116530)
@@ -41,7 +40,6 @@ fun AdminDashboardScreen(
 ) {
     var selectedTab by remember { mutableStateOf("Dashboard") }
     var activeSubScreen by remember { mutableStateOf<String?>(null) }
-    var dbStatus by remember { mutableStateOf("") }
 
     if (selectedTab == "Schedules") {
         ScheduleManagementScreen(onBack = { selectedTab = "Dashboard" })
@@ -57,6 +55,7 @@ fun AdminDashboardScreen(
         when (activeSubScreen) {
             "Bus" -> BusManagementScreen(onBack = { activeSubScreen = null })
             "Driver" -> DriverManagementScreen(onBack = { activeSubScreen = null })
+            "Conductor" -> ConductorManagementScreen(onBack = { activeSubScreen = null })
             "Schedule" -> ScheduleManagementScreen(onBack = { activeSubScreen = null })
             "Route" -> RouteManagementScreen(onBack = { activeSubScreen = null })
             "Tracker" -> LeafletMapViewScreen(showAllRoutes = true, onBack = { activeSubScreen = null })
@@ -223,45 +222,15 @@ fun AdminDashboardScreen(
                         onClick = { activeSubScreen = "Terminal" }
                     )
                     QuickActionTile(
-                        icon = Icons.Default.LocationOn,
-                        title = "Real-Time\nTracker",
+                        icon = Icons.Default.Person,
+                        title = "Conductor\nManagement",
                         modifier = Modifier.weight(1f),
-                        onClick = { activeSubScreen = "Tracker" }
+                        onClick = { activeSubScreen = "Conductor" }
                     )
                 }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
-
-            // Cloud Database Sync Status Button
-            Button(
-                onClick = {
-                    dbStatus = "Saving Admin & Transit records to Firestore..."
-                    DatabaseManager.saveAllSampleData(
-                        onSuccess = { dbStatus = "Admin Records Synced with Cloud Database" },
-                        onFailure = { e -> dbStatus = "Sync Error: ${e.localizedMessage}" }
-                    )
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = AdminGreen),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(46.dp),
-                shape = RoundedCornerShape(10.dp)
-            ) {
-                Text("Sync Admin Data to Cloud Firestore", fontSize = 13.sp, fontWeight = FontWeight.Bold)
-            }
-
-            if (dbStatus.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = dbStatus,
-                    color = AdminGreen,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
 
             OutlinedButton(
                 onClick = onLogout,

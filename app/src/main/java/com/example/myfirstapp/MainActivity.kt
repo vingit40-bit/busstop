@@ -45,8 +45,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.myfirstapp.admin.AdminDashboardScreen
 import com.example.myfirstapp.admin.LeafletMapViewScreen
+import com.example.myfirstapp.passenger.CommuterMainScreen
+import com.example.myfirstapp.passenger.PassengerSearchScreen
 import com.example.myfirstapp.ui.theme.MyFirstAppTheme
-import com.google.firebase.auth.FirebaseAuth
+
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -73,36 +75,7 @@ fun MainApp() {
 
     // Auto-check if a user session is active (Auto-Login / Remember Me feature)
     LaunchedEffect(Unit) {
-        val firebaseUser = FirebaseAuth.getInstance().currentUser
-        if (firebaseUser != null) {
-            DatabaseManager.getUser(
-                userId = firebaseUser.uid,
-                onSuccess = { fetchedUser ->
-                    if (fetchedUser != null) {
-                        loggedInUser = fetchedUser
-                    } else {
-                        loggedInUser = user(
-                            userId = firebaseUser.uid,
-                            fullname = firebaseUser.displayName ?: "Transit User",
-                            email = firebaseUser.email ?: "",
-                            password = "",
-                            role = "Passenger"
-                        )
-                    }
-                    currentScreen = ScreenState.HOME
-                },
-                onFailure = {
-                    loggedInUser = user(
-                        userId = firebaseUser.uid,
-                        fullname = firebaseUser.displayName ?: "Transit User",
-                        email = firebaseUser.email ?: "",
-                        password = "",
-                        role = "Passenger"
-                    )
-                    currentScreen = ScreenState.HOME
-                }
-            )
-        }
+        // Session handled via Login / Remember Me
     }
 
     Surface(
@@ -137,24 +110,43 @@ fun MainApp() {
             ScreenState.HOME -> {
                 val user = loggedInUser
                 if (user != null) {
-                    if (user.role == "Staff" || user.role == "Admin") {
-                        AdminDashboardScreen(
-                            user = user,
-                            onLogout = {
-                                FirebaseAuth.getInstance().signOut()
-                                loggedInUser = null
-                                currentScreen = ScreenState.LOGIN
-                            }
-                        )
-                    } else {
-                        HomeScreen(
-                            user = user,
-                            onLogout = {
-                                FirebaseAuth.getInstance().signOut()
-                                loggedInUser = null
-                                currentScreen = ScreenState.LOGIN
-                            }
-                        )
+                    when (user.role.trim().lowercase()) {
+                        "admin", "staff" -> {
+                            AdminDashboardScreen(
+                                user = user,
+                                onLogout = {
+                                    loggedInUser = null
+                                    currentScreen = ScreenState.LOGIN
+                                }
+                            )
+                        }
+                        "driver" -> {
+                            com.example.myfirstapp.driver.DriverScheduleScreen(
+                                user = user,
+                                onLogout = {
+                                    loggedInUser = null
+                                    currentScreen = ScreenState.LOGIN
+                                }
+                            )
+                        }
+                        "conductor" -> {
+                            com.example.myfirstapp.conductor.ConductorDashboardScreen(
+                                user = user,
+                                onLogout = {
+                                    loggedInUser = null
+                                    currentScreen = ScreenState.LOGIN
+                                }
+                            )
+                        }
+                        else -> {
+                            HomeScreen(
+                                user = user,
+                                onLogout = {
+                                    loggedInUser = null
+                                    currentScreen = ScreenState.LOGIN
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -176,25 +168,8 @@ fun HomeScreen(
         return
     }
 
-    var dbStatus by remember { mutableStateOf("Connecting to Cloud Firestore...") }
     var isSearchingDestination by remember { mutableStateOf(false) }
     var trackedRouteName by remember { mutableStateOf<String?>(null) }
-
-    // Automatically sync user and sample data to Firebase Firestore
-    LaunchedEffect(Unit) {
-        DatabaseManager.saveAllSampleData(
-            onSuccess = {
-                dbStatus = "Cloud Database Connected & Synced"
-            },
-            onFailure = { e ->
-                if (e.localizedMessage?.contains("PERMISSION_DENIED") == true) {
-                    dbStatus = "Firestore Security Rules: Set rules to allow read, write in Firebase Console"
-                } else {
-                    dbStatus = "Cloud Sync Notice: ${e.localizedMessage}"
-                }
-            }
-        )
-    }
 
     if (trackedRouteName != null) {
         LeafletMapViewScreen(
@@ -216,122 +191,10 @@ fun HomeScreen(
         return
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(Color(0xFFF5F8F6))
-            .padding(20.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        // TransitGo Header
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = TransitGreen)
-        ) {
-            Column(modifier = Modifier.padding(20.dp)) {
-                Text(
-                    text = "Welcome back, ${user.fullname}!",
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
-                )
-                Text(
-                    text = "Role: ${user.role}  •  Email: ${user.email}",
-                    fontSize = 13.sp,
-                    color = Color.White.copy(alpha = 0.8f)
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Role-Specific Dashboard Content based on UI designs
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable {
-                    if (user.role != "Driver") {
-                        isSearchingDestination = true
-                    }
-                },
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = Color.White),
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-        ) {
-            Column(modifier = Modifier.padding(20.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = if (user.role == "Driver") Icons.Default.DirectionsBus else Icons.Default.Search,
-                        contentDescription = "Header Icon",
-                        tint = TransitGreen,
-                        modifier = Modifier.size(22.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = when (user.role) {
-                            "Driver" -> "Driver Dashboard"
-                            else -> "Passenger Booking & Tracking"
-                        },
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TransitGreen
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                when (user.role) {
-                    "Driver" -> {
-                        Text("Today's Assigned Route:", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Color.Black)
-                        Text("City Terminal ➔ Airport Hub (BUS_101)", fontSize = 13.sp, color = Color.DarkGray)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("Scheduled Departure: 09:30 AM", fontSize = 13.sp, color = Color.DarkGray)
-                        Text("Status: On Duty", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TransitGreen)
-                    }
-                    else -> {
-                        Text("Where to go?", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.Black)
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text("Origin: Central Terminal (Manila)", fontSize = 13.sp, color = Color.DarkGray)
-                        Text("Destination: Choose destination...", fontSize = 13.sp, color = Color.Gray)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Button(
-                            onClick = { isSearchingDestination = true },
-                            colors = ButtonDefaults.buttonColors(containerColor = TransitGreen),
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Text("Search Destination & Buses", color = Color.White)
-                        }
-                    }
-                }
-            }
-        }
-
-        if (dbStatus.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(
-                text = dbStatus,
-                color = TransitGreen,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium
-            )
-        }
-
-        Spacer(modifier = Modifier.weight(1f))
-
-        OutlinedButton(
-            onClick = onLogout,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(48.dp),
-            shape = RoundedCornerShape(10.dp)
-        ) {
-            Text("Logout", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = TransitGreen)
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-    }
+    CommuterMainScreen(
+        user = user,
+        onLogout = onLogout
+    )
 }
 
 @Preview(showBackground = true)

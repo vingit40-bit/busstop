@@ -939,7 +939,9 @@ fun BusManagementScreen(onBack: () -> Unit) {
                                     licenseNumber = matchedDriver.licenseNumber,
                                     licenseExpiry = matchedDriver.licenseExpiry,
                                     assignedBus = "$busLabel$busPlateLabel",
-                                    employmentStatus = matchedDriver.employmentStatus
+                                    employmentStatus = matchedDriver.employmentStatus,
+                                    email = matchedDriver.email,
+                                    password = matchedDriver.password
                                 )
                             }
                         }
