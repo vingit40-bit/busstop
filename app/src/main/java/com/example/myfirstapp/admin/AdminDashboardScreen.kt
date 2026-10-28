@@ -42,7 +42,7 @@ fun AdminDashboardScreen(
     var activeSubScreen by remember { mutableStateOf<String?>(null) }
 
     if (selectedTab == "Schedules") {
-        ScheduleManagementScreen(onBack = { selectedTab = "Dashboard" })
+        ScheduleManagementScreen(user = user, onBack = { selectedTab = "Dashboard" })
         return
     }
 
@@ -56,7 +56,7 @@ fun AdminDashboardScreen(
             "Bus" -> BusManagementScreen(onBack = { activeSubScreen = null })
             "Driver" -> DriverManagementScreen(onBack = { activeSubScreen = null })
             "Conductor" -> ConductorManagementScreen(onBack = { activeSubScreen = null })
-            "Schedule" -> ScheduleManagementScreen(onBack = { activeSubScreen = null })
+            "Schedule" -> ScheduleManagementScreen(user = user, onBack = { activeSubScreen = null })
             "Route" -> RouteManagementScreen(onBack = { activeSubScreen = null })
             "Tracker" -> LeafletMapViewScreen(showAllRoutes = true, onBack = { activeSubScreen = null })
             "Terminal" -> TerminalManagementScreen(onBack = { activeSubScreen = null })

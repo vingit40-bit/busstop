@@ -1,10 +1,13 @@
 package com.example.myfirstapp.admin
 
+import android.Manifest
 import android.view.ViewGroup
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
@@ -28,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.myfirstapp.BusRoute
+import com.example.myfirstapp.BusSchedule
 import com.example.myfirstapp.DatabaseManager
 import java.io.File
 
@@ -47,9 +51,39 @@ fun LeafletMapViewScreen(
 ) {
     val context = LocalContext.current
     var isMapLoaded by remember { mutableStateOf(false) }
+    var webViewRef by remember { mutableStateOf<WebView?>(null) }
 
-    // Live sync all active routes from Cloud Firestore for Real-Time Tracker mode
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            try {
+                val fusedLocationClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(context)
+                val locationRequest = com.google.android.gms.location.LocationRequest.Builder(
+                    com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY, 3000L
+                ).setMinUpdateIntervalMillis(2000L).build()
+
+                fusedLocationClient.requestLocationUpdates(locationRequest, object : com.google.android.gms.location.LocationCallback() {
+                    override fun onLocationResult(result: com.google.android.gms.location.LocationResult) {
+                        val loc = result.lastLocation
+                        if (loc != null) {
+                            webViewRef?.evaluateJavascript("if(window.updateBusLocation) { window.updateBusLocation(${loc.latitude}, ${loc.longitude}); }", null)
+                        }
+                    }
+                }, android.os.Looper.getMainLooper())
+            } catch (_: SecurityException) {}
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+    }
+
+    // Live sync all active routes & schedules from Cloud Firestore for Real-Time Tracker mode
     val firestoreRoutes = remember { mutableStateListOf<BusRoute>() }
+    val firestoreSchedules = remember { mutableStateListOf<BusSchedule>() }
 
     LaunchedEffect(showAllRoutes) {
         if (showAllRoutes) {
@@ -59,7 +93,27 @@ fun LeafletMapViewScreen(
                     firestoreRoutes.addAll(fetchedRoutes)
                 }
             )
+            DatabaseManager.listenToSchedules(
+                onUpdate = { fetchedSchedules ->
+                    firestoreSchedules.clear()
+                    firestoreSchedules.addAll(fetchedSchedules)
+                }
+            )
         }
+    }
+
+    val schedulesJsonData = remember(firestoreSchedules.toList()) {
+        val sb = StringBuilder("[")
+        firestoreSchedules.forEachIndexed { idx, s ->
+            if (idx > 0) sb.append(",")
+            val cleanBusNum = s.bus.busNumber.replace("'", "\\'")
+            val cleanRoute = s.route.routeName.replace("'", "\\'")
+            val cleanDriver = s.bus.assignedDriver.replace("'", "\\'")
+            val cleanStatus = s.status.replace("'", "\\'")
+            sb.append("{\"busNumber\":\"$cleanBusNum\",\"route\":\"$cleanRoute\",\"driver\":\"$cleanDriver\",\"status\":\"$cleanStatus\"}")
+        }
+        sb.append("]")
+        sb.toString()
     }
 
     val activeRoutesList = remember(firestoreRoutes.toList(), showAllRoutes) {
@@ -182,6 +236,7 @@ fun LeafletMapViewScreen(
                 var isSingleMode = $isSingleTerminal;
                 var showAllRoutesMode = $showAllRoutes;
                 var routesData = $routesJsonData;
+                var schedulesData = $schedulesJsonData;
 
                 var paramStartLat = $startLatJS;
                 var paramStartLng = $startLngJS;
@@ -384,6 +439,20 @@ fun LeafletMapViewScreen(
                             var allBounds = [];
                             var routeColors = ["#116530", "#1565C0", "#E65100", "#7B1FA2", "#C62828", "#00838F"];
 
+                            if (schedulesData && schedulesData.length > 0) {
+                                schedulesData.forEach(function(sched, idx) {
+                                    var bCoords = [14.5995 + (idx * 0.008), 120.9842 + (idx * 0.008)];
+                                    var busIcon = L.divIcon({
+                                        className: 'live-bus-fleet-' + idx,
+                                        html: "<div style='background:#116530;color:white;padding:6px 12px;border-radius:16px;font-weight:bold;font-size:11px;border:2px solid white;box-shadow:0 3px 8px rgba(0,0,0,0.35);white-space:nowrap;'>🚌 Bus " + sched.busNumber + " (" + sched.status + ")</div>",
+                                        iconSize: [150, 30],
+                                        iconAnchor: [75, 15]
+                                    });
+                                    L.marker(bCoords, { icon: busIcon }).addTo(map)
+                                        .bindPopup("<b>Bus: " + sched.busNumber + "</b><br>Route: " + sched.route + "<br>Driver: " + sched.driver + "<br>Status: " + sched.status);
+                                });
+                            }
+
                             routesData.forEach(function(route, idx) {
                                 var rColor = route.color || routeColors[idx % routeColors.size];
 
@@ -485,6 +554,20 @@ fun LeafletMapViewScreen(
 
                             L.marker(destCoords, { icon: redIcon }).addTo(map)
                                 .bindPopup("<b>Bus Route Destination: " + cleanDestName + "</b>");
+
+                            var busLiveMarker = L.marker(startCoords, {
+                                icon: L.divIcon({
+                                    className: 'live-driver-marker',
+                                    html: "<div style='background:#116530;color:white;padding:6px 14px;border-radius:18px;font-weight:bold;font-size:12px;border:3px solid white;box-shadow:0 4px 12px rgba(0,0,0,0.4);white-space:nowrap;'>🚌 Live Driver GPS</div>",
+                                    iconSize: [130, 34],
+                                    iconAnchor: [65, 17]
+                                })
+                            }).addTo(map);
+
+                            window.updateBusLocation = function(lat, lng) {
+                                busLiveMarker.setLatLng([lat, lng]);
+                                map.panTo([lat, lng]);
+                            };
 
                             // OSRM Driving Engine Route
                             var osrmUrl = "https://router.project-osrm.org/route/v1/driving/" +
@@ -624,6 +707,7 @@ fun LeafletMapViewScreen(
                         } else {
                             loadDataWithBaseURL("https://leafletjs.com", leafletHtmlContent, "text/html", "utf-8", null)
                         }
+                        webViewRef = this
                     }
                 },
                 modifier = Modifier.fillMaxSize()

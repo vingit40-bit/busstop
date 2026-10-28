@@ -40,7 +40,10 @@ data class BookingRecord(
     val seats: String,
     val totalPrice: Double,
     val passengerEmail: String,
-    val status: String = "Confirmed"
+    val status: String = "Confirmed",
+    val paymentMethod: String = "Cash",
+    val receiptUrl: String = "",
+    val paymentStatus: String = "Pending"
 )
 
 data class LocationSuggestion(
@@ -279,6 +282,11 @@ object DatabaseManager {
                                     imageUrl = obj.safeString("image_url")
                                 )
                             )
+                        }
+                        if (list.isEmpty()) {
+                            list.add(Bus("B-101", "BUS-001", 50, "Active", "ABC-123", "Air-conditioned", "Unassigned", "", "", "", "08:00", ""))
+                            list.add(Bus("B-102", "BUS-002", 50, "Active", "XYZ-789", "Ordinary", "Unassigned", "", "", "", "09:00", ""))
+                            list.add(Bus("B-103", "BUS-003", 50, "Active", "DEF-456", "Air-conditioned", "Unassigned", "", "", "", "10:00", ""))
                         }
                         withContext(Dispatchers.Main) { onUpdate(list) }
                     } catch (e: Exception) {
@@ -695,6 +703,7 @@ object DatabaseManager {
                             val arrivalTime = obj.safeString("arrival_time", "01:30 PM")
                             val status = obj.safeString("status", "Scheduled")
                             val scheduleDate = obj.safeString("schedule_date", "")
+                            val rejectionReason = obj.safeString("rejection_reason", "")
 
                             val startP = if (routeName.contains(" ➔ ")) {
                                 routeName.split(" ➔ ")[0].trim()
@@ -711,6 +720,7 @@ object DatabaseManager {
                             val routeObj = BusRoute("R01", routeName, startP, destP)
                             val scheduleObj = BusSchedule(scheduleId, busObj, routeObj, departureTime, arrivalTime)
                             scheduleObj.status = status
+                            scheduleObj.rejectionReason = rejectionReason
                             list.add(scheduleObj)
                         }
                         withContext(Dispatchers.Main) { onUpdate(list) }
@@ -754,6 +764,61 @@ object DatabaseManager {
             val res = makeRequest("bus_schedules?schedule_id=eq.$scheduleId", "PATCH", jsonObj)
             withContext(Dispatchers.Main) {
                 if (res != null) onSuccess() else onFailure(Exception("Failed to update status"))
+            }
+        }
+    }
+
+    fun updateScheduleRejection(
+        scheduleId: String,
+        reason: String,
+        onSuccess: () -> Unit = {},
+        onFailure: (Exception) -> Unit = {}
+    ) {
+        ioScope.launch {
+            val jsonObj = JSONObject().apply {
+                put("status", "Rejected")
+                put("driver_name", "Unassigned")
+                put("rejection_reason", reason)
+            }.toString()
+
+            var res = makeRequest("bus_schedules?schedule_id=eq.$scheduleId", "PATCH", jsonObj)
+            if (res == null) {
+                val fallbackJson = JSONObject().apply {
+                    put("status", "Rejected")
+                    put("driver_name", "Unassigned")
+                }.toString()
+                res = makeRequest("bus_schedules?schedule_id=eq.$scheduleId", "PATCH", fallbackJson)
+            }
+
+            withContext(Dispatchers.Main) {
+                if (res != null) onSuccess() else onFailure(Exception("Failed to update rejection"))
+            }
+        }
+    }
+
+    fun reassignScheduleDriver(
+        scheduleId: String,
+        newDriverName: String,
+        onSuccess: () -> Unit = {},
+        onFailure: (Exception) -> Unit = {}
+    ) {
+        ioScope.launch {
+            val jsonObj = JSONObject().apply {
+                put("driver_name", newDriverName)
+                put("status", "Scheduled")
+            }.toString()
+
+            var res = makeRequest("bus_schedules?schedule_id=eq.$scheduleId", "PATCH", jsonObj)
+            if (res == null) {
+                val fallbackJson = JSONObject().apply {
+                    put("driver_name", newDriverName)
+                    put("status", "Scheduled")
+                }.toString()
+                res = makeRequest("bus_schedules?schedule_id=eq.$scheduleId", "PATCH", fallbackJson)
+            }
+
+            withContext(Dispatchers.Main) {
+                if (res != null) onSuccess() else onFailure(Exception("Failed to reassign driver"))
             }
         }
     }
@@ -915,5 +980,115 @@ object DatabaseManager {
                 if (res != null) onSuccess() else onFailure(Exception("Failed to delete conductor"))
             }
         }
+    }
+
+    // --- BOOKINGS & SEAT MANAGEMENT ---
+    fun saveBooking(
+        booking: BookingRecord,
+        onSuccess: () -> Unit = {},
+        onFailure: (Exception) -> Unit = {}
+    ) {
+        ioScope.launch {
+            val json = JSONObject().apply {
+                put("booking_id", booking.bookingId)
+                put("bus_id", booking.busId)
+                put("route_name", booking.routeName)
+                put("seats", booking.seats)
+                put("total_price", booking.totalPrice)
+                put("passenger_email", booking.passengerEmail)
+                put("status", booking.status)
+                put("payment_method", booking.paymentMethod)
+                put("receipt_url", booking.receiptUrl)
+                put("payment_status", booking.paymentStatus)
+            }.toString()
+
+            val res = makeRequest("bookings", "POST", json)
+            withContext(Dispatchers.Main) {
+                if (res != null) onSuccess() else onFailure(Exception("Failed to save booking"))
+            }
+        }
+    }
+
+    fun listenToBookings(
+        onUpdate: (List<BookingRecord>) -> Unit,
+        onError: (Exception) -> Unit = {}
+    ) {
+        ioScope.launch {
+            while (isActive) {
+                val res = makeRequest("bookings?select=*", "GET")
+                if (res != null) {
+                    try {
+                        val arr = JSONArray(res)
+                        val list = mutableListOf<BookingRecord>()
+                        for (i in 0 until arr.length()) {
+                            val obj = arr.getJSONObject(i)
+                            list.add(
+                                BookingRecord(
+                                    bookingId = obj.safeString("booking_id"),
+                                    busId = obj.safeString("bus_id"),
+                                    routeName = obj.safeString("route_name"),
+                                    seats = obj.safeString("seats"),
+                                    totalPrice = obj.optDouble("total_price", 0.0),
+                                    passengerEmail = obj.safeString("passenger_email"),
+                                    status = obj.safeString("status", "Confirmed"),
+                                    paymentMethod = obj.safeString("payment_method", "Cash"),
+                                    receiptUrl = obj.safeString("receipt_url", ""),
+                                    paymentStatus = obj.safeString("payment_status", "Pending")
+                                )
+                            )
+                        }
+                        withContext(Dispatchers.Main) { onUpdate(list) }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) { onError(e) }
+                    }
+                }
+                delay(5000)
+            }
+        }
+    }
+
+    fun updateBookingPaymentStatus(
+        bookingId: String,
+        newPaymentStatus: String,
+        onSuccess: () -> Unit = {},
+        onFailure: (Exception) -> Unit = {}
+    ) {
+        ioScope.launch {
+            val jsonObj = JSONObject().apply {
+                put("payment_status", newPaymentStatus)
+            }.toString()
+
+            val res = makeRequest("bookings?booking_id=eq.$bookingId", "PATCH", jsonObj)
+            withContext(Dispatchers.Main) {
+                if (res != null) onSuccess() else onFailure(Exception("Failed to update payment status"))
+            }
+        }
+    }
+
+    fun showAdminNotification(context: android.content.Context, title: String, message: String) {
+        val channelId = "transitgo_admin_alerts"
+        val notificationManager = context.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager ?: return
+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            val channel = android.app.NotificationChannel(
+                channelId,
+                "TransitGo Admin Alerts",
+                android.app.NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Notifications for driver rejections and dispatch alerts"
+            }
+            notificationManager.createNotificationChannel(channel)
+        }
+
+        val builder = androidx.core.app.NotificationCompat.Builder(context, channelId)
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setContentTitle(title)
+            .setContentText(message)
+            .setPriority(androidx.core.app.NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+
+        try {
+            notificationManager.notify((0..100000).random(), builder.build())
+        } catch (_: SecurityException) {}
     }
 }

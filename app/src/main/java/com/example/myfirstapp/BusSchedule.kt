@@ -8,6 +8,7 @@ class BusSchedule(
     var arrivalTime: String
 ) {
     var status: String = "Scheduled"
+    var rejectionReason: String = ""
 
     fun updateTime(
         newDeparture: String,
@@ -15,7 +16,6 @@ class BusSchedule(
     ){
         departureTime = newDeparture
         arrivalTime = newArrival
-
     }
 
     fun displaySchedule(){
@@ -25,5 +25,8 @@ class BusSchedule(
         println("Departure: $departureTime")
         println("Arrival: $arrivalTime")
         println("Status: $status")
+        if (rejectionReason.isNotBlank()) {
+            println("Rejection Reason: $rejectionReason")
+        }
     }
 }

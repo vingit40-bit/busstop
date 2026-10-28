@@ -1,6 +1,8 @@
 package com.example.myfirstapp.passenger
 
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -21,7 +23,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.myfirstapp.BookingRecord
 import com.example.myfirstapp.BusSchedule
+import com.example.myfirstapp.DatabaseManager
 import com.example.myfirstapp.TransitGreen
 
 data class SeatItem(
@@ -39,10 +43,41 @@ fun SelectSeatScreen(
     val context = LocalContext.current
     val unitFare = if (schedule.route.fare > 0) schedule.route.fare else schedule.route.calculateEstimatedFare()
 
-    val occupiedSeatNumbers = remember { setOf(4, 9, 14, 18, 23, 25, 28) }
-    var seatsList by remember {
+    val maxCapacity = 32
+    var occupiedSeatNumbers by remember { mutableStateOf(setOf<Int>()) }
+
+    var paymentMethod by remember { mutableStateOf("Cash") } // "Cash", "GCash", "PayMaya"
+    var receiptUriStr by remember { mutableStateOf("") }
+
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: android.net.Uri? ->
+        if (uri != null) {
+            receiptUriStr = uri.toString()
+            Toast.makeText(context, "Real receipt image attached from gallery!", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    LaunchedEffect(schedule.bus.busNumber) {
+        DatabaseManager.listenToBookings(
+            onUpdate = { bookings ->
+                val booked = mutableSetOf<Int>()
+                bookings.forEach { b ->
+                    if (b.busId == schedule.bus.busNumber || b.busId.isBlank()) {
+                        b.seats.split(",").forEach { s ->
+                            s.trim().toIntOrNull()?.let { booked.add(it) }
+                        }
+                    }
+                }
+                occupiedSeatNumbers = booked
+            },
+            onError = {}
+        )
+    }
+
+    var seatsList by remember(occupiedSeatNumbers) {
         mutableStateOf(
-            (1..28).map { num ->
+            (1..maxCapacity).map { num ->
                 SeatItem(num, if (occupiedSeatNumbers.contains(num)) "Occupied" else "Available")
             }
         )
@@ -79,14 +114,71 @@ fun SelectSeatScreen(
                         Text("₱%.2f".format(totalPrice), fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = TransitGreen)
                     }
 
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text("Mode of Payment:", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf("Cash", "GCash", "PayMaya").forEach { method ->
+                            FilterChip(
+                                selected = paymentMethod == method,
+                                onClick = { paymentMethod = method },
+                                label = { Text(method, fontSize = 12.sp) },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+
+                    if (paymentMethod != "Cash") {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        OutlinedButton(
+                            onClick = {
+                                imagePickerLauncher.launch("image/*")
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(1.dp, if (receiptUriStr.isNotBlank()) Color(0xFF2E7D32) else TransitGreen)
+                        ) {
+                            Text(if (receiptUriStr.isNotBlank()) "✓ Real Receipt Image Attached" else "Upload Real $paymentMethod Receipt (Gallery)", fontSize = 12.sp, color = if (receiptUriStr.isNotBlank()) Color(0xFF2E7D32) else TransitGreen)
+                        }
+                    }
+
                     Spacer(modifier = Modifier.height(10.dp))
 
                     Button(
                         onClick = {
                             if (selectedSeats.isEmpty()) {
                                 Toast.makeText(context, "Please select at least one seat", Toast.LENGTH_SHORT).show()
+                            } else if (paymentMethod != "Cash" && receiptUriStr.isBlank()) {
+                                Toast.makeText(context, "Please upload your real $paymentMethod receipt image from gallery", Toast.LENGTH_SHORT).show()
                             } else {
-                                onBookingConfirmed(selectedSeats.map { it.seatNumber }, totalPrice)
+                                val seatNums = selectedSeats.map { it.seatNumber }
+                                val bookingId = "BKG-" + (1000..9999).random()
+                                val newBooking = BookingRecord(
+                                    bookingId = bookingId,
+                                    busId = schedule.bus.busNumber,
+                                    routeName = schedule.route.routeName,
+                                    seats = seatNums.joinToString(","),
+                                    totalPrice = totalPrice,
+                                    passengerEmail = "passenger@transitgo.com",
+                                    paymentMethod = paymentMethod,
+                                    receiptUrl = receiptUriStr,
+                                    paymentStatus = if (paymentMethod == "Cash") "Pay Cash to Conductor" else "Pending Receipt Verification"
+                                )
+                                DatabaseManager.saveBooking(
+                                    newBooking,
+                                    onSuccess = {
+                                        Toast.makeText(context, "Seat(s) booked successfully via $paymentMethod!", Toast.LENGTH_SHORT).show()
+                                        onBookingConfirmed(seatNums, totalPrice)
+                                    },
+                                    onFailure = { err ->
+                                        Toast.makeText(context, "Booking saved locally. Error: ${err.localizedMessage}", Toast.LENGTH_SHORT).show()
+                                        onBookingConfirmed(seatNums, totalPrice)
+                                    }
+                                )
                             }
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = TransitGreen),

@@ -50,6 +50,27 @@ fun ConductorHeadcountScreen() {
         )
     }
 
+    // Real-time synchronization with passenger seat bookings from Supabase
+    LaunchedEffect(selectedSchedule) {
+        DatabaseManager.listenToBookings(
+            onUpdate = { bookings ->
+                val bookedSet = mutableSetOf<Int>()
+                val currentBusNum = selectedSchedule?.bus?.busNumber ?: ""
+                bookings.forEach { b ->
+                    if (b.busId == currentBusNum || b.busId.isBlank()) {
+                        b.seats.split(",").forEach { s ->
+                            s.trim().toIntOrNull()?.let { bookedSet.add(it) }
+                        }
+                    }
+                }
+                if (bookedSet.isNotEmpty()) {
+                    occupiedSeats = (occupiedSeats + bookedSet).toMutableSet()
+                }
+            },
+            onError = {}
+        )
+    }
+
     val occupiedCount = occupiedSeats.size
     val availableCount = maxCapacity - occupiedCount
 
@@ -166,7 +187,7 @@ fun ConductorHeadcountScreen() {
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            Text("Live Bus Seat Availability Grid (Tap seat to toggle)", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
+            Text("Live Bus Seat Availability Grid (Synced with Passenger Bookings)", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
             Spacer(modifier = Modifier.height(6.dp))
 
             Card(

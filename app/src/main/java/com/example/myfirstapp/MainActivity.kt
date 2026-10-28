@@ -54,6 +54,25 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        val appContext = applicationContext
+        val notifiedRejectedIds = mutableSetOf<String>()
+        DatabaseManager.listenToSchedules(
+            onUpdate = { fetchedSchedules ->
+                fetchedSchedules.forEach { s ->
+                    if (s.status == "Rejected" && !notifiedRejectedIds.contains(s.scheduleId)) {
+                        notifiedRejectedIds.add(s.scheduleId)
+                        DatabaseManager.showAdminNotification(
+                            appContext,
+                            "⚠️ Driver Rejected Schedule",
+                            "Bus ${s.bus.busNumber} (${s.route.routeName}) was rejected. Reason: ${s.rejectionReason.ifBlank { "No reason provided" }}"
+                        )
+                    }
+                }
+            },
+            onError = {}
+        )
+
         setContent {
             MyFirstAppTheme {
                 MainApp()

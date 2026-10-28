@@ -1,6 +1,9 @@
 package com.example.myfirstapp.admin
 
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.Manifest
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -21,6 +24,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DirectionsBus
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Event
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -36,6 +40,7 @@ import com.example.myfirstapp.BusRoute
 import com.example.myfirstapp.BusSchedule
 import com.example.myfirstapp.DatabaseManager
 import com.example.myfirstapp.DriverRecord
+import com.example.myfirstapp.user
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -50,6 +55,7 @@ data class ScheduleRecord(
     var departureTime: String,
     var arrivalTime: String,
     var status: String,
+    var rejectionReason: String = "",
     var dateDay: String = SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).format(Date())
 )
 
@@ -105,7 +111,7 @@ fun parseTimeToHourMinute(timeStr: String): Pair<Int, Int> {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ScheduleManagementScreen(onBack: () -> Unit = {}) {
+fun ScheduleManagementScreen(user: user? = null, onBack: () -> Unit = {}) {
     val context = LocalContext.current
     var showAddDialog by remember { mutableStateOf(false) }
     var editingSchedule by remember { mutableStateOf<ScheduleRecord?>(null) }
@@ -126,12 +132,32 @@ fun ScheduleManagementScreen(onBack: () -> Unit = {}) {
     val scheduleList = remember { mutableStateListOf<ScheduleRecord>() }
 
     // Live sync directly with Cloud Firestore database for Schedules, Buses, Routes, and Drivers
+    val notifiedRejectedIds = remember { mutableSetOf<String>() }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { _ -> }
+
     LaunchedEffect(Unit) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
         DatabaseManager.listenToSchedules(
             onUpdate = { fetchedSchedules ->
                 scheduleLoadError = ""
                 scheduleList.clear()
                 fetchedSchedules.forEach { s ->
+                    if (s.status == "Rejected" && !notifiedRejectedIds.contains(s.scheduleId)) {
+                        notifiedRejectedIds.add(s.scheduleId)
+                        if (user == null || user.role == "Admin") {
+                            DatabaseManager.showAdminNotification(
+                                context,
+                                "⚠️ Driver Rejected Schedule",
+                                "Bus ${s.bus.busNumber} (${s.route.routeName}) was rejected. Reason: ${s.rejectionReason.ifBlank { "No reason provided" }}"
+                            )
+                        }
+                    }
                     scheduleList.add(
                         ScheduleRecord(
                             scheduleId = s.scheduleId,
@@ -141,6 +167,7 @@ fun ScheduleManagementScreen(onBack: () -> Unit = {}) {
                             departureTime = s.departureTime,
                             arrivalTime = s.arrivalTime,
                             status = s.status,
+                            rejectionReason = s.rejectionReason,
                             dateDay = if (s.bus.operator.isNotBlank()) s.bus.operator else todayFullDateStr
                         )
                     )
@@ -211,6 +238,130 @@ fun ScheduleManagementScreen(onBack: () -> Unit = {}) {
         scheduleList.filter { it.dateDay == selectedFullDate || it.dateDay.isBlank() }
     }
 
+    var showRejectedNotificationsDialog by remember { mutableStateOf(false) }
+    var scheduleToReassign by remember { mutableStateOf<ScheduleRecord?>(null) }
+    var selectedNewDriver by remember { mutableStateOf("") }
+
+    if (showRejectedNotificationsDialog) {
+        val rejectedSchedules = scheduleList.filter { it.status == "Rejected" }
+        AlertDialog(
+            onDismissRequest = { showRejectedNotificationsDialog = false },
+            title = { Text("Driver Schedule Rejections", fontWeight = FontWeight.Bold, color = Color(0xFFC62828)) },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 350.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    if (rejectedSchedules.isEmpty()) {
+                        Text("No rejected schedules.", color = Color.Gray)
+                    } else {
+                        rejectedSchedules.forEach { rej ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(10.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE))
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Text("Bus: ${rej.busNumber} • Route: ${rej.routeName}", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.Black)
+                                    Text("Driver: ${rej.driverName}", fontSize = 12.sp, color = Color.DarkGray)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text("Reason: ${rej.rejectionReason.ifBlank { "No reason provided" }}", fontSize = 12.sp, color = Color(0xFFC62828), fontWeight = FontWeight.Medium)
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Button(
+                                        onClick = {
+                                            scheduleToReassign = rej
+                                            showRejectedNotificationsDialog = false
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = AdminGreen),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text("Reassign Driver", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showRejectedNotificationsDialog = false }) {
+                    Text("Close", color = Color.DarkGray)
+                }
+            }
+        )
+    }
+
+    if (scheduleToReassign != null) {
+        val targetRej = scheduleToReassign!!
+        val availableDrivers = registeredDrivers
+            .map { it.driverName }
+            .filter { it.trim() != targetRej.driverName.trim() }
+        AlertDialog(
+            onDismissRequest = { scheduleToReassign = null; selectedNewDriver = "" },
+            title = { Text("Reassign Driver", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Select a new driver to assign to Bus ${targetRej.busNumber}:", fontSize = 13.sp, color = Color.Gray)
+
+                    if (availableDrivers.isEmpty()) {
+                        Text("No registered drivers found.", color = Color.Red)
+                    } else {
+                        availableDrivers.forEach { dName ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { selectedNewDriver = dName }
+                                    .padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = selectedNewDriver == dName,
+                                    onClick = { selectedNewDriver = dName }
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(dName, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (selectedNewDriver.isBlank()) {
+                            Toast.makeText(context, "Please select a driver", Toast.LENGTH_SHORT).show()
+                            return@Button
+                        }
+                        DatabaseManager.reassignScheduleDriver(
+                            scheduleId = targetRej.scheduleId,
+                            newDriverName = selectedNewDriver,
+                            onSuccess = {
+                                Toast.makeText(context, "Driver reassigned to $selectedNewDriver successfully!", Toast.LENGTH_SHORT).show()
+                                scheduleToReassign = null
+                                selectedNewDriver = ""
+                            },
+                            onFailure = { err ->
+                                Toast.makeText(context, "Error: ${err.localizedMessage}", Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = AdminGreen)
+                ) {
+                    Text("Confirm Reassignment", color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { scheduleToReassign = null; selectedNewDriver = "" }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     Scaffold(
         floatingActionButton = {
             FloatingActionButton(
@@ -245,8 +396,25 @@ fun ScheduleManagementScreen(onBack: () -> Unit = {}) {
                     Text("Schedules Management", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.Black)
                 }
 
-                IconButton(onClick = { showDatePickerModal = true }) {
-                    Icon(imageVector = Icons.Default.CalendarToday, contentDescription = "Open Google Calendar Picker", tint = AdminGreen)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val rejectedList = scheduleList.filter { it.status == "Rejected" }
+                    if (rejectedList.isNotEmpty()) {
+                        BadgedBox(
+                            badge = {
+                                Badge(containerColor = Color(0xFFC62828)) {
+                                    Text("${rejectedList.size}", color = Color.White)
+                                }
+                            }
+                        ) {
+                            IconButton(onClick = { showRejectedNotificationsDialog = true }) {
+                                Icon(imageVector = Icons.Default.Notifications, contentDescription = "Rejection Notifications", tint = Color(0xFFC62828))
+                            }
+                        }
+                    }
+
+                    IconButton(onClick = { showDatePickerModal = true }) {
+                        Icon(imageVector = Icons.Default.CalendarToday, contentDescription = "Open Google Calendar Picker", tint = AdminGreen)
+                    }
                 }
             }
 

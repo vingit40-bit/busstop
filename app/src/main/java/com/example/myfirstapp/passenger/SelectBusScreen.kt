@@ -1,5 +1,6 @@
 package com.example.myfirstapp.passenger
 
+import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -15,9 +16,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.myfirstapp.BookingRecord
 import com.example.myfirstapp.BusSchedule
 import com.example.myfirstapp.DatabaseManager
 import com.example.myfirstapp.TransitGreen
@@ -33,7 +36,9 @@ fun SelectBusScreen(
     onBack: () -> Unit = {},
     onBusSelected: (BusSchedule) -> Unit = {}
 ) {
+    val context = LocalContext.current
     var schedules by remember { mutableStateOf<List<BusSchedule>>(emptyList()) }
+    var allBookings by remember { mutableStateOf<List<BookingRecord>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
 
     var selectedDateNum by remember { mutableStateOf("23") }
@@ -55,6 +60,12 @@ fun SelectBusScreen(
                 isLoading = false
             },
             onError = { _ -> isLoading = false }
+        )
+        DatabaseManager.listenToBookings(
+            onUpdate = { bookings ->
+                allBookings = bookings
+            },
+            onError = {}
         )
     }
 
@@ -159,7 +170,15 @@ fun SelectBusScreen(
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxSize()) {
                     items(filteredSchedules) { schedule ->
                         val fareDisplay = if (schedule.route.fare > 0) schedule.route.fare else schedule.route.calculateEstimatedFare()
-                        val remainingSeats = (20..38).random()
+                        
+                        val totalCapacity = 32
+                        val busBookedSeats = allBookings
+                            .filter { it.busId == schedule.bus.busNumber || it.busId.isBlank() }
+                            .flatMap { it.seats.split(",") }
+                            .mapNotNull { it.trim().toIntOrNull() }
+                            .toSet()
+                        val remainingSeats = (totalCapacity - busBookedSeats.size).coerceAtLeast(0)
+                        val isFullyBooked = remainingSeats <= 0
 
                         Card(
                             modifier = Modifier.fillMaxWidth(),
@@ -181,7 +200,7 @@ fun SelectBusScreen(
                                 }
 
                                 Spacer(modifier = Modifier.height(8.dp))
-                                HorizontalDivider(color = Color(0xFFF0F0F0))
+                                HorizontalDivider(color = Color(0xFFF0F2F0))
                                 Spacer(modifier = Modifier.height(8.dp))
 
                                 Row(
@@ -191,18 +210,24 @@ fun SelectBusScreen(
                                 ) {
                                     Column {
                                         Text("Bus: ${schedule.bus.busNumber} • ${schedule.bus.busType}", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.DarkGray)
-                                        Text("Remaining Seats: $remainingSeats", fontSize = 12.sp, color = TransitGreen, fontWeight = FontWeight.Bold)
+                                        Text("Remaining Seats: $remainingSeats / $totalCapacity", fontSize = 12.sp, color = if (!isFullyBooked) TransitGreen else Color(0xFFC62828), fontWeight = FontWeight.Bold)
                                     }
 
                                     Button(
                                         onClick = {
-                                            onBusSelected(schedule)
+                                            if (isFullyBooked) {
+                                                Toast.makeText(context, "Bus is fully booked! No available seats.", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                onBusSelected(schedule)
+                                            }
                                         },
-                                        colors = ButtonDefaults.buttonColors(containerColor = TransitGreen),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (isFullyBooked) Color.Gray else TransitGreen
+                                        ),
                                         shape = RoundedCornerShape(8.dp),
                                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
                                     ) {
-                                        Text("Select", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                        Text(if (isFullyBooked) "Fully Booked" else "Select", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                                     }
                                 }
                             }
