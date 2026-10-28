@@ -283,11 +283,6 @@ object DatabaseManager {
                                 )
                             )
                         }
-                        if (list.isEmpty()) {
-                            list.add(Bus("B-101", "BUS-001", 50, "Active", "ABC-123", "Air-conditioned", "Unassigned", "", "", "", "08:00", ""))
-                            list.add(Bus("B-102", "BUS-002", 50, "Active", "XYZ-789", "Ordinary", "Unassigned", "", "", "", "09:00", ""))
-                            list.add(Bus("B-103", "BUS-003", 50, "Active", "DEF-456", "Air-conditioned", "Unassigned", "", "", "", "10:00", ""))
-                        }
                         withContext(Dispatchers.Main) { onUpdate(list) }
                     } catch (e: Exception) {
                         withContext(Dispatchers.Main) { onError(e) }
