@@ -683,10 +683,60 @@ object DatabaseManager {
     ) {
         ioScope.launch {
             while (isActive) {
-                val res = makeRequest("bus_schedules?select=*", "GET")
-                if (res != null) {
+                val schedRes = makeRequest("bus_schedules?select=*", "GET")
+                val busRes = makeRequest("buses?select=*", "GET")
+                val routeRes = makeRequest("bus_routes?select=*", "GET")
+                if (schedRes != null) {
                     try {
-                        val arr = JSONArray(res)
+                        val busMap = mutableMapOf<String, Bus>()
+                        if (busRes != null) {
+                            val busArr = JSONArray(busRes)
+                            for (i in 0 until busArr.length()) {
+                                val bObj = busArr.getJSONObject(i)
+                                val bNum = bObj.safeString("bus_number")
+                                val bId = bObj.safeString("bus_id")
+                                val b = Bus(
+                                    busId = bId,
+                                    busNumber = bNum,
+                                    capacity = bObj.optInt("capacity", 50),
+                                    status = bObj.safeString("status", "Active"),
+                                    plateNumber = bObj.safeString("plate_number"),
+                                    busType = bObj.safeString("bus_type", "Air-conditioned"),
+                                    assignedDriver = bObj.safeString("assigned_driver", "Unassigned"),
+                                    imageUrl = bObj.safeString("image_url")
+                                )
+                                busMap[bNum.trim().lowercase()] = b
+                                busMap[bId.trim().lowercase()] = b
+                                busMap[bNum] = b
+                                busMap[bId] = b
+                            }
+                        }
+
+                        val routeMap = mutableMapOf<String, BusRoute>()
+                        if (routeRes != null) {
+                            val routeArr = JSONArray(routeRes)
+                            for (i in 0 until routeArr.length()) {
+                                val rObj = routeArr.getJSONObject(i)
+                                val rName = rObj.safeString("route_name")
+                                val rId = rObj.safeString("route_id")
+                                val r = BusRoute(
+                                    routeId = rId,
+                                    routeName = rName,
+                                    startPoint = rObj.safeString("start_point"),
+                                    destination = rObj.safeString("destination"),
+                                    status = rObj.safeString("status", "Active"),
+                                    startLat = rObj.optDouble("start_lat", 0.0),
+                                    startLng = rObj.optDouble("start_lng", 0.0),
+                                    destLat = rObj.optDouble("dest_lat", 0.0),
+                                    destLng = rObj.optDouble("dest_lng", 0.0),
+                                    fare = rObj.optDouble("fare", 0.0)
+                                )
+                                routeMap[rName.trim().lowercase()] = r
+                                routeMap[rId.trim().lowercase()] = r
+                            }
+                        }
+
+                        val arr = JSONArray(schedRes)
                         val list = mutableListOf<BusSchedule>()
                         for (i in 0 until arr.length()) {
                             val obj = arr.getJSONObject(i)
@@ -708,12 +758,24 @@ object DatabaseManager {
                                 routeName.split(" ➔ ")[1].trim()
                             } else "Airport Hub"
 
-                            val busObj = Bus(scheduleId, busNumber, 50, status)
-                            busObj.assignedDriver = driverName
-                            busObj.operator = scheduleDate
+                            val cleanBusNum = busNumber.trim().lowercase()
+                            val matchedBus = busMap[cleanBusNum] ?: busMap[busNumber] ?: busMap.values.find { it.busNumber.trim().lowercase() == cleanBusNum } ?: Bus(scheduleId, busNumber, 50, status).apply {
+                                assignedDriver = driverName
+                            }
 
-                            val routeObj = BusRoute("R01", routeName, startP, destP)
-                            val scheduleObj = BusSchedule(scheduleId, busObj, routeObj, departureTime, arrivalTime)
+                            val cleanRouteName = routeName.trim().lowercase()
+                            val matchedRoute = routeMap[cleanRouteName] ?: routeMap.values.find { it.routeName.trim().lowercase().contains(cleanRouteName) } ?: BusRoute("R01", routeName, startP, destP)
+
+                            val resolvedDriver = if (driverName.isNotBlank() && driverName != "Unassigned") {
+                                driverName
+                            } else if (matchedBus.assignedDriver.isNotBlank() && matchedBus.assignedDriver != "Unassigned") {
+                                matchedBus.assignedDriver
+                            } else {
+                                "Unassigned"
+                            }
+                            matchedBus.assignedDriver = resolvedDriver
+
+                            val scheduleObj = BusSchedule(scheduleId, matchedBus, matchedRoute, departureTime, arrivalTime)
                             scheduleObj.status = status
                             scheduleObj.rejectionReason = rejectionReason
                             list.add(scheduleObj)
@@ -1004,6 +1066,20 @@ object DatabaseManager {
         }
     }
 
+    fun deleteBookingForSeat(
+        busId: String,
+        seatNum: Int,
+        onSuccess: () -> Unit = {},
+        onFailure: (Exception) -> Unit = {}
+    ) {
+        ioScope.launch {
+            val res = makeRequest("bookings?bus_id=eq.$busId&seats=like.%25$seatNum%25", "DELETE")
+            withContext(Dispatchers.Main) {
+                if (res != null) onSuccess() else onFailure(Exception("Failed to delete booking"))
+            }
+        }
+    }
+
     fun listenToBookings(
         onUpdate: (List<BookingRecord>) -> Unit,
         onError: (Exception) -> Unit = {}
@@ -1085,5 +1161,67 @@ object DatabaseManager {
         try {
             notificationManager.notify((0..100000).random(), builder.build())
         } catch (_: SecurityException) {}
+    }
+
+    fun uploadBusImageToSupabaseStorage(
+        context: android.content.Context,
+        imageUri: android.net.Uri,
+        onSuccess: (String) -> Unit,
+        onFailure: (Exception) -> Unit
+    ) {
+        ioScope.launch {
+            try {
+                val fileName = "bus_${System.currentTimeMillis()}.jpg"
+                val url = URL("https://ulhylotzjyvevtiufrmb.supabase.co/storage/v1/object/bus_image/$fileName")
+                val connection = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    setRequestProperty("apikey", SUPABASE_KEY)
+                    setRequestProperty("Authorization", "Bearer $SUPABASE_KEY")
+                    setRequestProperty("Content-Type", "image/jpeg")
+                    doInput = true
+                    doOutput = true
+                }
+
+                context.contentResolver.openInputStream(imageUri)?.use { inputStream ->
+                    connection.outputStream.use { outputStream ->
+                        inputStream.copyTo(outputStream)
+                    }
+                }
+
+                val responseCode = connection.responseCode
+                if (responseCode in 200..299) {
+                    val publicUrl = "https://ulhylotzjyvevtiufrmb.supabase.co/storage/v1/object/public/bus_image/$fileName"
+                    withContext(Dispatchers.Main) { onSuccess(publicUrl) }
+                } else {
+                    // Fallback to Base64 string if 401/403 unauthorized occurs due to bucket RLS policies
+                    val b64 = convertUriToBase64(context, imageUri)
+                    if (b64.isNotBlank()) {
+                        withContext(Dispatchers.Main) { onSuccess(b64) }
+                    } else {
+                        val err = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: "Error $responseCode"
+                        withContext(Dispatchers.Main) { onFailure(Exception(err)) }
+                    }
+                }
+            } catch (e: Exception) {
+                try {
+                    val b64 = convertUriToBase64(context, imageUri)
+                    if (b64.isNotBlank()) {
+                        withContext(Dispatchers.Main) { onSuccess(b64) }
+                        return@launch
+                    }
+                } catch (_: Exception) {}
+                withContext(Dispatchers.Main) { onFailure(e) }
+            }
+        }
+    }
+
+    private fun convertUriToBase64(context: android.content.Context, uri: android.net.Uri): String {
+        return try {
+            val inputStream = context.contentResolver.openInputStream(uri)
+            val bytes = inputStream?.readBytes() ?: return ""
+            "data:image/jpeg;base64," + android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+        } catch (_: Exception) {
+            ""
+        }
     }
 }

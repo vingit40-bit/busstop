@@ -10,22 +10,46 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.DirectionsBus
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.myfirstapp.BookingRecord
+import com.example.myfirstapp.Bus
 import com.example.myfirstapp.BusSchedule
 import com.example.myfirstapp.DatabaseManager
 import com.example.myfirstapp.TransitGreen
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 data class DateItem(val dayName: String, val dateNum: String, var isSelected: Boolean = false)
+
+fun calculateTripDurationFormatted(dep: String, arr: String): String {
+    return try {
+        val sdf = SimpleDateFormat("hh:mm a", Locale.ENGLISH)
+        val d1 = sdf.parse(dep.trim())
+        val d2 = sdf.parse(arr.trim())
+        if (d1 != null && d2 != null) {
+            var diffMs = d2.time - d1.time
+            if (diffMs < 0) diffMs += 24 * 60 * 60 * 1000L
+            val minutes = (diffMs / (1000 * 60)).toInt()
+            val hours = minutes / 60
+            val mins = minutes % 60
+            if (hours > 0) "Duration ~ ${hours}h ${mins}m" else "Duration ~ ${mins} min"
+        } else "Duration ~ 120 min"
+    } catch (_: Exception) {
+        "Duration ~ 120 min"
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -38,6 +62,7 @@ fun SelectBusScreen(
 ) {
     val context = LocalContext.current
     var schedules by remember { mutableStateOf<List<BusSchedule>>(emptyList()) }
+    var registeredBuses by remember { mutableStateOf<List<Bus>>(emptyList()) }
     var allBookings by remember { mutableStateOf<List<BookingRecord>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
 
@@ -60,6 +85,12 @@ fun SelectBusScreen(
                 isLoading = false
             },
             onError = { _ -> isLoading = false }
+        )
+        DatabaseManager.listenToBuses(
+            onUpdate = { buses ->
+                registeredBuses = buses
+            },
+            onError = {}
         )
         DatabaseManager.listenToBookings(
             onUpdate = { bookings ->
@@ -170,15 +201,20 @@ fun SelectBusScreen(
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxSize()) {
                     items(filteredSchedules) { schedule ->
                         val fareDisplay = if (schedule.route.fare > 0) schedule.route.fare else schedule.route.calculateEstimatedFare()
-                        
-                        val totalCapacity = 32
+                        val tripDurationText = calculateTripDurationFormatted(schedule.departureTime, schedule.arrivalTime)
+
+                        val totalCapacity = if (schedule.bus.capacity > 0) schedule.bus.capacity else 50
                         val busBookedSeats = allBookings
-                            .filter { it.busId == schedule.bus.busNumber || it.busId.isBlank() }
+                            .filter { it.busId == schedule.bus.busNumber || it.busId == schedule.bus.busId || it.busId.isBlank() }
                             .flatMap { it.seats.split(",") }
                             .mapNotNull { it.trim().toIntOrNull() }
                             .toSet()
                         val remainingSeats = (totalCapacity - busBookedSeats.size).coerceAtLeast(0)
                         val isFullyBooked = remainingSeats <= 0
+
+                        val busImgUrl = schedule.bus.imageUrl.ifBlank {
+                            registeredBuses.find { b -> schedule.bus.busNumber.contains(b.busNumber, ignoreCase = true) || schedule.bus.busNumber.contains(b.busId, ignoreCase = true) }?.imageUrl ?: ""
+                        }
 
                         Card(
                             modifier = Modifier.fillMaxWidth(),
@@ -192,9 +228,19 @@ fun SelectBusScreen(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Column {
-                                        Text("${schedule.departureTime} - ${schedule.arrivalTime}", fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = Color.Black)
-                                        Text("Duration ~ 120 min", fontSize = 12.sp, color = Color.Gray)
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        BusThumbnail(
+                                            imageUrl = busImgUrl,
+                                            contentDescription = "Bus Image",
+                                            modifier = Modifier
+                                                .size(48.dp)
+                                                .clip(RoundedCornerShape(8.dp))
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column {
+                                            Text("${schedule.departureTime} - ${schedule.arrivalTime}", fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = Color.Black)
+                                            Text(tripDurationText, fontSize = 12.sp, color = Color.Gray)
+                                        }
                                     }
                                     Text("₱%.0f".format(fareDisplay), fontWeight = FontWeight.ExtraBold, fontSize = 18.sp, color = TransitGreen)
                                 }
@@ -224,10 +270,12 @@ fun SelectBusScreen(
                                         colors = ButtonDefaults.buttonColors(
                                             containerColor = if (isFullyBooked) Color.Gray else TransitGreen
                                         ),
-                                        shape = RoundedCornerShape(8.dp),
-                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
+                                        shape = RoundedCornerShape(10.dp),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                                     ) {
-                                        Text(if (isFullyBooked) "Fully Booked" else "Select", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                        Text(if (isFullyBooked) "Full" else "Select", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                        Spacer(modifier = Modifier.width(2.dp))
+                                        Icon(imageVector = Icons.Default.ChevronRight, contentDescription = "Select", modifier = Modifier.size(18.dp))
                                     }
                                 }
                             }

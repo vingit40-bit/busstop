@@ -30,6 +30,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -539,13 +540,17 @@ fun ScheduleManagementScreen(user: user? = null, onBack: () -> Unit = {}) {
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(
-                                            imageVector = Icons.Default.DirectionsBus,
-                                            contentDescription = "Bus Icon",
-                                            tint = AdminGreen,
-                                            modifier = Modifier.size(20.dp)
+                                        val matchedBusObj = registeredBuses.find { b -> schedule.busNumber.contains(b.busNumber, ignoreCase = true) || schedule.busNumber.contains(b.busId, ignoreCase = true) }
+                                        val busImgUrl = matchedBusObj?.imageUrl ?: ""
+
+                                        BusImage(
+                                            imageUrl = busImgUrl,
+                                            contentDescription = "Bus Image",
+                                            modifier = Modifier
+                                                .size(38.dp)
+                                                .clip(RoundedCornerShape(8.dp))
                                         )
-                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
                                         Text(
                                             text = schedule.busNumber,
                                             fontWeight = FontWeight.Bold,
@@ -703,6 +708,15 @@ fun ScheduleManagementScreen(user: user? = null, onBack: () -> Unit = {}) {
         var departureTime by remember { mutableStateOf(targetSchedule?.departureTime ?: "10:00 AM") }
         var arrivalTime by remember { mutableStateOf(targetSchedule?.arrivalTime ?: "01:30 PM") }
         var selectedStatus by remember { mutableStateOf(targetSchedule?.status ?: "Scheduled") }
+
+        LaunchedEffect(selectedBus, registeredBuses) {
+            if (targetSchedule == null || targetSchedule.driverName == "Unassigned") {
+                val matchingBus = registeredBuses.find { b -> selectedBus.contains(b.busNumber) || selectedBus.contains(b.busId) }
+                if (matchingBus != null && matchingBus.assignedDriver.isNotBlank() && matchingBus.assignedDriver != "Unassigned") {
+                    selectedDriver = matchingBus.assignedDriver
+                }
+            }
+        }
 
         var showDepartureTimePicker by remember { mutableStateOf(false) }
         var showArrivalTimePicker by remember { mutableStateOf(false) }

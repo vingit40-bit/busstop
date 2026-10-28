@@ -20,6 +20,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.myfirstapp.BookingRecord
 import com.example.myfirstapp.BusSchedule
 import com.example.myfirstapp.DatabaseManager
 
@@ -28,10 +29,10 @@ fun ConductorHeadcountScreen() {
     val context = LocalContext.current
     var schedules by remember { mutableStateOf<List<BusSchedule>>(emptyList()) }
     var selectedSchedule by remember { mutableStateOf<BusSchedule?>(null) }
+    var allBookings by remember { mutableStateOf<List<BookingRecord>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
 
-    val maxCapacity = 50
-    var occupiedSeats by remember { mutableStateOf(mutableSetOf(1, 2, 3, 4, 5, 12, 14, 18)) }
+    var occupiedSeats by remember { mutableStateOf(setOf<Int>()) }
 
     LaunchedEffect(Unit) {
         DatabaseManager.listenToSchedules(
@@ -48,31 +49,38 @@ fun ConductorHeadcountScreen() {
             },
             onError = { _ -> isLoading = false }
         )
-    }
 
-    // Real-time synchronization with passenger seat bookings from Supabase
-    LaunchedEffect(selectedSchedule) {
         DatabaseManager.listenToBookings(
             onUpdate = { bookings ->
-                val bookedSet = mutableSetOf<Int>()
-                val currentBusNum = selectedSchedule?.bus?.busNumber ?: ""
-                bookings.forEach { b ->
-                    if (b.busId == currentBusNum || b.busId.isBlank()) {
-                        b.seats.split(",").forEach { s ->
-                            s.trim().toIntOrNull()?.let { bookedSet.add(it) }
-                        }
-                    }
-                }
-                if (bookedSet.isNotEmpty()) {
-                    occupiedSeats = (occupiedSeats + bookedSet).toMutableSet()
-                }
+                allBookings = bookings
             },
             onError = {}
         )
     }
 
+    val currentSched = selectedSchedule ?: schedules.firstOrNull()
+    val maxCapacity = if (currentSched != null && currentSched.bus.capacity > 0) currentSched.bus.capacity else 50
+    val busNum = currentSched?.bus?.busNumber ?: "BUS-001"
+
+    // Sync live occupied seats for selected schedule from Supabase bookings
+    LaunchedEffect(currentSched, allBookings) {
+        if (currentSched != null) {
+            val bId = currentSched.bus.busId.trim()
+
+            val bookedSet = mutableSetOf<Int>()
+            allBookings.forEach { b ->
+                if (b.busId.trim().equals(busNum, ignoreCase = true) || b.busId.trim().equals(bId, ignoreCase = true)) {
+                    b.seats.split(",").forEach { s ->
+                        s.trim().toIntOrNull()?.let { bookedSet.add(it) }
+                    }
+                }
+            }
+            occupiedSeats = bookedSet
+        }
+    }
+
     val occupiedCount = occupiedSeats.size
-    val availableCount = maxCapacity - occupiedCount
+    val availableCount = (maxCapacity - occupiedCount).coerceAtLeast(0)
 
     Column(modifier = Modifier.fillMaxSize()) {
         Text("Conductor Seat & Headcount Management", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
@@ -92,15 +100,14 @@ fun ConductorHeadcountScreen() {
                 }
             }
         } else {
-            val currentSched = selectedSchedule ?: schedules[0]
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(containerColor = Color.White)
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
-                    Text("Managed Bus: ${currentSched.bus.busNumber} (${currentSched.bus.busType})", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = ConductorGreen)
-                    Text("Route: ${currentSched.route.routeName}", fontSize = 13.sp, color = Color.DarkGray)
+                    Text("Managed Bus: ${currentSched?.bus?.busNumber ?: "N/A"} (${currentSched?.bus?.busType ?: "Standard"})", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = ConductorGreen)
+                    Text("Route: ${currentSched?.route?.routeName ?: "Assigned Route"}", fontSize = 13.sp, color = Color.DarkGray)
                 }
             }
 
@@ -117,7 +124,7 @@ fun ConductorHeadcountScreen() {
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Column {
-                            Text("Total Capacity", fontSize = 12.sp, color = Color.Gray)
+                            Text("Bus Capacity", fontSize = 12.sp, color = Color.Gray)
                             Text("$maxCapacity Seats", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.Black)
                         }
                         Column {
@@ -132,7 +139,7 @@ fun ConductorHeadcountScreen() {
 
                     Spacer(modifier = Modifier.height(12.dp))
                     LinearProgressIndicator(
-                        progress = { occupiedCount.toFloat() / maxCapacity.toFloat() },
+                        progress = { if (maxCapacity > 0) (occupiedCount.toFloat() / maxCapacity.toFloat()).coerceIn(0f, 1f) else 0f },
                         modifier = Modifier.fillMaxWidth().height(10.dp),
                         color = Color(0xFFC62828),
                         trackColor = Color(0xFFC8E6C9)
@@ -148,8 +155,20 @@ fun ConductorHeadcountScreen() {
                             onClick = {
                                 val nextAvailable = (1..maxCapacity).firstOrNull { !occupiedSeats.contains(it) }
                                 if (nextAvailable != null) {
-                                    occupiedSeats = (occupiedSeats + nextAvailable).toMutableSet()
-                                    Toast.makeText(context, "Passenger Boarded: Seat #$nextAvailable", Toast.LENGTH_SHORT).show()
+                                    val condBkg = BookingRecord(
+                                        bookingId = "COND-BKG-" + (1000..9999).random(),
+                                        busId = busNum,
+                                        routeName = currentSched?.route?.routeName ?: "Bus Trip",
+                                        seats = "$nextAvailable",
+                                        totalPrice = 0.0,
+                                        passengerEmail = "conductor@transitgo.com",
+                                        status = "Confirmed",
+                                        paymentMethod = "Cash",
+                                        paymentStatus = "Paid - Cash Collected"
+                                    )
+                                    DatabaseManager.saveBooking(condBkg, onSuccess = {
+                                        Toast.makeText(context, "Passenger Boarded & Saved: Seat #$nextAvailable", Toast.LENGTH_SHORT).show()
+                                    })
                                 } else {
                                     Toast.makeText(context, "Bus is fully booked!", Toast.LENGTH_SHORT).show()
                                 }
@@ -167,8 +186,9 @@ fun ConductorHeadcountScreen() {
                                 if (occupiedSeats.isNotEmpty()) {
                                     val lastOccupied = occupiedSeats.maxOrNull()
                                     if (lastOccupied != null) {
-                                        occupiedSeats = (occupiedSeats - lastOccupied).toMutableSet()
-                                        Toast.makeText(context, "Passenger Alighted: Seat #$lastOccupied", Toast.LENGTH_SHORT).show()
+                                        DatabaseManager.deleteBookingForSeat(busNum, lastOccupied, onSuccess = {
+                                            Toast.makeText(context, "Passenger Alighted & Released: Seat #$lastOccupied", Toast.LENGTH_SHORT).show()
+                                        })
                                     }
                                 } else {
                                     Toast.makeText(context, "No passengers onboard", Toast.LENGTH_SHORT).show()
@@ -187,7 +207,7 @@ fun ConductorHeadcountScreen() {
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            Text("Live Bus Seat Availability Grid (Synced with Passenger Bookings)", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
+            Text("Live Bus Seat Grid ($occupiedCount / $maxCapacity Occupied - Saved Real-Time)", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
             Spacer(modifier = Modifier.height(6.dp))
 
             Card(
@@ -209,11 +229,24 @@ fun ConductorHeadcountScreen() {
                                     .size(44.dp)
                                     .clickable {
                                         if (isOccupied) {
-                                            occupiedSeats = (occupiedSeats - seatNum).toMutableSet()
-                                            Toast.makeText(context, "Seat #$seatNum marked Available", Toast.LENGTH_SHORT).show()
+                                            DatabaseManager.deleteBookingForSeat(busNum, seatNum, onSuccess = {
+                                                Toast.makeText(context, "Seat #$seatNum released to Available in Supabase", Toast.LENGTH_SHORT).show()
+                                            })
                                         } else {
-                                            occupiedSeats = (occupiedSeats + seatNum).toMutableSet()
-                                            Toast.makeText(context, "Seat #$seatNum marked Occupied", Toast.LENGTH_SHORT).show()
+                                            val condBkg = BookingRecord(
+                                                bookingId = "COND-BKG-" + (1000..9999).random(),
+                                                busId = busNum,
+                                                routeName = currentSched?.route?.routeName ?: "Bus Trip",
+                                                seats = "$seatNum",
+                                                totalPrice = 0.0,
+                                                passengerEmail = "conductor@transitgo.com",
+                                                status = "Confirmed",
+                                                paymentMethod = "Cash",
+                                                paymentStatus = "Paid - Cash Collected"
+                                            )
+                                            DatabaseManager.saveBooking(condBkg, onSuccess = {
+                                                Toast.makeText(context, "Seat #$seatNum saved Occupied in Supabase", Toast.LENGTH_SHORT).show()
+                                            })
                                         }
                                     },
                                 shape = RoundedCornerShape(8.dp),

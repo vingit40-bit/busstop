@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.example.myfirstapp.BookingRecord
 import com.example.myfirstapp.Bus
 import com.example.myfirstapp.BusRoute
 import com.example.myfirstapp.DatabaseManager
@@ -99,49 +100,58 @@ fun BusImage(
     contentDescription: String,
     modifier: Modifier = Modifier
 ) {
-    val bitmap = remember(imageUrl) {
-        if (imageUrl.startsWith("data:image") && imageUrl.contains("base64,")) {
-            try {
-                val base64Data = imageUrl.substringAfter("base64,")
-                val decodedBytes = Base64.decode(base64Data, Base64.DEFAULT)
-                BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
-            } catch (_: Exception) {
+    val context = LocalContext.current
+    var bitmap by remember(imageUrl) { mutableStateOf<android.graphics.Bitmap?>(null) }
+
+    LaunchedEffect(imageUrl) {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val bmp = try {
+                when {
+                    imageUrl.startsWith("data:image") && imageUrl.contains("base64,") -> {
+                        val base64Data = imageUrl.substringAfter("base64,")
+                        val decodedBytes = Base64.decode(base64Data, Base64.DEFAULT)
+                        BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
+                    }
+                    imageUrl.startsWith("/") -> {
+                        val file = File(imageUrl)
+                        if (file.exists()) BitmapFactory.decodeFile(file.absolutePath) else null
+                    }
+                    imageUrl.startsWith("content://") -> {
+                        val uri = android.net.Uri.parse(imageUrl)
+                        val inputStream = context.contentResolver.openInputStream(uri)
+                        val bytes = inputStream?.readBytes()
+                        if (bytes != null) BitmapFactory.decodeByteArray(bytes, 0, bytes.size) else null
+                    }
+                    imageUrl.startsWith("http://") || imageUrl.startsWith("https://") -> {
+                        val url = java.net.URL(imageUrl)
+                        val connection = url.openConnection() as java.net.HttpURLConnection
+                        connection.connectTimeout = 5000
+                        connection.readTimeout = 5000
+                        val bytes = connection.inputStream.readBytes()
+                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    }
+                    else -> null
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("TransitGoImage", "Error loading image from $imageUrl: ${e.localizedMessage}")
                 null
             }
-        } else if (imageUrl.startsWith("/")) {
-            try {
-                val file = File(imageUrl)
-                if (file.exists()) {
-                    BitmapFactory.decodeFile(file.absolutePath)
-                } else null
-            } catch (_: Exception) {
-                null
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                bitmap = bmp
             }
-        } else null
+        }
     }
 
     if (bitmap != null) {
         Image(
-            bitmap = bitmap.asImageBitmap(),
+            bitmap = bitmap!!.asImageBitmap(),
             contentDescription = contentDescription,
             modifier = modifier,
             contentScale = ContentScale.Crop
         )
     } else {
-        val context = LocalContext.current
-        val imageRequest = remember(imageUrl) {
-            val model: Any = if (imageUrl.isBlank()) R.drawable.logo else imageUrl
-            ImageRequest.Builder(context)
-                .data(model)
-                .crossfade(true)
-                .fallback(R.drawable.logo)
-                .error(R.drawable.logo)
-                .placeholder(R.drawable.logo)
-                .build()
-        }
-
-        AsyncImage(
-            model = imageRequest,
+        Image(
+            painter = androidx.compose.ui.res.painterResource(id = R.drawable.logo),
             contentDescription = contentDescription,
             modifier = modifier,
             contentScale = ContentScale.Crop
@@ -163,6 +173,7 @@ fun BusManagementScreen(onBack: () -> Unit) {
     val busTypeOptions = listOf("Air-conditioned", "Ordinary")
     val busList = remember { mutableStateListOf<Bus>() }
     val availableRoutes = remember { mutableStateListOf<BusRoute>() }
+    val allBookings = remember { mutableStateListOf<BookingRecord>() }
 
     LaunchedEffect(Unit) {
         DatabaseManager.listenToDrivers(
@@ -183,6 +194,13 @@ fun BusManagementScreen(onBack: () -> Unit) {
             onUpdate = { fetchedRoutes ->
                 availableRoutes.clear()
                 availableRoutes.addAll(fetchedRoutes)
+            }
+        )
+
+        DatabaseManager.listenToBookings(
+            onUpdate = { fetchedBookings ->
+                allBookings.clear()
+                allBookings.addAll(fetchedBookings)
             }
         )
     }
@@ -299,7 +317,15 @@ fun BusManagementScreen(onBack: () -> Unit) {
                                         if (bus.plateNumber.isNotEmpty()) {
                                             Text("Plate Number: ${bus.plateNumber}", fontSize = 13.sp, color = Color.DarkGray)
                                         }
-                                        Text("Bus Type: ${bus.busType}  •  ${bus.capacity} seats", fontSize = 12.sp, color = Color.DarkGray)
+                                        val busBookedSeats = allBookings
+                                            .filter { it.busId.equals(bus.busNumber, ignoreCase = true) || it.busId.equals(bus.busId, ignoreCase = true) }
+                                            .flatMap { it.seats.split(",") }
+                                            .mapNotNull { it.trim().toIntOrNull() }
+                                            .toSet()
+                                        val occupiedCount = busBookedSeats.size
+                                        val remainingSeats = (bus.capacity - occupiedCount).coerceAtLeast(0)
+
+                                        Text("Bus Type: ${bus.busType}  •  ${bus.capacity} seats (${remainingSeats} avail, ${occupiedCount} occupied)", fontSize = 12.sp, color = AdminGreen, fontWeight = FontWeight.SemiBold)
                                         Text("Driver: ${bus.assignedDriver}", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = AdminGreen)
                                         val matchedCardDriver = registeredDriverRecords.find { it.driverName.equals(bus.assignedDriver, ignoreCase = true) }
                                         if (matchedCardDriver != null && matchedCardDriver.contactNumber.isNotBlank()) {
@@ -575,6 +601,7 @@ fun BusManagementScreen(onBack: () -> Unit) {
 
         var selectedStatus by remember { mutableStateOf(targetBus?.status ?: "Active") }
         var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
+        var isLoading by remember { mutableStateOf(false) }
         val currentImageUrl = targetBus?.imageUrl ?: ""
 
         val imagePickerLauncher = rememberLauncherForActivityResult(
@@ -890,65 +917,72 @@ fun BusManagementScreen(onBack: () -> Unit) {
                         }
                         val cap = capacityText.toIntOrNull() ?: 50
 
-                        // Convert picked photo to lightweight Base64 JPEG string (~25KB)
-                        // so it is stored directly in Cloud Firestore and syncs across all devices!
-                        val finalImg = if (selectedImageUri != null) {
-                            val b64 = convertUriToBase64(context, selectedImageUri!!)
-                            if (b64.isNotEmpty()) {
-                                b64
+                        val saveBusAction = { imageUrlToUse: String ->
+                            val updatedBus = Bus(
+                                busId = autoGeneratedId,
+                                busNumber = busCompany.trim(),
+                                capacity = cap,
+                                status = selectedStatus,
+                                plateNumber = plateNumber.trim(),
+                                busType = busType.trim(),
+                                assignedDriver = assignedDriver,
+                                operator = busCompany.trim(),
+                                route = assignedRoute.trim(),
+                                imageUrl = imageUrlToUse
+                            )
+
+                            val existingIndex = busList.indexOfFirst { it.busId == autoGeneratedId }
+                            if (existingIndex != -1) {
+                                busList[existingIndex] = updatedBus
                             } else {
-                                currentImageUrl
+                                busList.add(0, updatedBus)
                             }
-                        } else {
-                            currentImageUrl
-                        }
 
-                        val updatedBus = Bus(
-                            busId = autoGeneratedId,
-                            busNumber = busCompany.trim(),
-                            capacity = cap,
-                            status = selectedStatus,
-                            plateNumber = plateNumber.trim(),
-                            busType = busType.trim(),
-                            assignedDriver = assignedDriver,
-                            operator = busCompany.trim(),
-                            route = assignedRoute.trim(),
-                            imageUrl = finalImg
-                        )
+                            DatabaseManager.saveBus(updatedBus)
 
-                        // Save or update bus directly in Cloud Firestore
-                        val existingIndex = busList.indexOfFirst { it.busId == autoGeneratedId }
-                        if (existingIndex != -1) {
-                            busList[existingIndex] = updatedBus
-                        } else {
-                            busList.add(0, updatedBus)
-                        }
-
-                        DatabaseManager.saveBus(updatedBus)
-
-                        // Sync driver record in Driver Management if a driver was assigned
-                        if (assignedDriver != "Unassigned") {
-                            val matchedDriver = registeredDriverRecords.find { it.driverName.equals(assignedDriver, ignoreCase = true) }
-                            if (matchedDriver != null) {
-                                val busLabel = if (updatedBus.busNumber.isNotBlank()) updatedBus.busNumber else "BUS-${updatedBus.busId}"
-                                val busPlateLabel = if (updatedBus.plateNumber.isNotBlank()) " (${updatedBus.plateNumber})" else ""
-                                DatabaseManager.saveDriverDetails(
-                                    driverId = matchedDriver.driverId,
-                                    driverName = matchedDriver.driverName,
-                                    contactNumber = matchedDriver.contactNumber,
-                                    licenseNumber = matchedDriver.licenseNumber,
-                                    licenseExpiry = matchedDriver.licenseExpiry,
-                                    assignedBus = "$busLabel$busPlateLabel",
-                                    employmentStatus = matchedDriver.employmentStatus,
-                                    email = matchedDriver.email,
-                                    password = matchedDriver.password
-                                )
+                            if (assignedDriver != "Unassigned") {
+                                val matchedDriver = registeredDriverRecords.find { it.driverName.equals(assignedDriver, ignoreCase = true) }
+                                if (matchedDriver != null) {
+                                    val busLabel = if (updatedBus.busNumber.isNotBlank()) updatedBus.busNumber else "BUS-${updatedBus.busId}"
+                                    val busPlateLabel = if (updatedBus.plateNumber.isNotBlank()) " (${updatedBus.plateNumber})" else ""
+                                    DatabaseManager.saveDriverDetails(
+                                        driverId = matchedDriver.driverId,
+                                        driverName = matchedDriver.driverName,
+                                        contactNumber = matchedDriver.contactNumber,
+                                        licenseNumber = matchedDriver.licenseNumber,
+                                        licenseExpiry = matchedDriver.licenseExpiry,
+                                        assignedBus = "$busLabel$busPlateLabel",
+                                        employmentStatus = matchedDriver.employmentStatus,
+                                        email = matchedDriver.email,
+                                        password = matchedDriver.password
+                                    )
+                                }
                             }
+
+                            Toast.makeText(context, "Bus $autoGeneratedId saved to Cloud Database!", Toast.LENGTH_SHORT).show()
+                            showAddDialog = false
+                            editingBus = null
+                            selectedImageUri = null
                         }
 
-                        Toast.makeText(context, "Bus $autoGeneratedId saved to Cloud Database!", Toast.LENGTH_SHORT).show()
-                        showAddDialog = false
-                        editingBus = null
+                        if (selectedImageUri != null) {
+                            isLoading = true
+                            DatabaseManager.uploadBusImageToSupabaseStorage(
+                                context = context,
+                                imageUri = selectedImageUri!!,
+                                onSuccess = { publicUrl ->
+                                    isLoading = false
+                                    saveBusAction(publicUrl)
+                                },
+                                onFailure = { err ->
+                                    isLoading = false
+                                    Toast.makeText(context, "Upload failed: ${err.localizedMessage}. Using current image.", Toast.LENGTH_SHORT).show()
+                                    saveBusAction(currentImageUrl)
+                                }
+                            )
+                        } else {
+                            saveBusAction(currentImageUrl)
+                        }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = AdminGreen)
                 ) {

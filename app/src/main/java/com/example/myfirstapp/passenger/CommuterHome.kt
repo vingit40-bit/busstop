@@ -42,49 +42,57 @@ fun BusThumbnail(
     contentDescription: String,
     modifier: Modifier = Modifier
 ) {
-    val bitmap = remember(imageUrl) {
-        if (imageUrl.startsWith("data:image") && imageUrl.contains("base64,")) {
-            try {
-                val base64Data = imageUrl.substringAfter("base64,")
-                val decodedBytes = Base64.decode(base64Data, Base64.DEFAULT)
-                BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
+    val context = LocalContext.current
+    var bitmap by remember(imageUrl) { mutableStateOf<android.graphics.Bitmap?>(null) }
+
+    LaunchedEffect(imageUrl) {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val bmp = try {
+                when {
+                    imageUrl.startsWith("data:image") && imageUrl.contains("base64,") -> {
+                        val base64Data = imageUrl.substringAfter("base64,")
+                        val decodedBytes = Base64.decode(base64Data, Base64.DEFAULT)
+                        BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
+                    }
+                    imageUrl.startsWith("/") -> {
+                        val file = File(imageUrl)
+                        if (file.exists()) BitmapFactory.decodeFile(file.absolutePath) else null
+                    }
+                    imageUrl.startsWith("content://") -> {
+                        val uri = android.net.Uri.parse(imageUrl)
+                        val inputStream = context.contentResolver.openInputStream(uri)
+                        val bytes = inputStream?.readBytes()
+                        if (bytes != null) BitmapFactory.decodeByteArray(bytes, 0, bytes.size) else null
+                    }
+                    imageUrl.startsWith("http://") || imageUrl.startsWith("https://") -> {
+                        val url = java.net.URL(imageUrl)
+                        val connection = url.openConnection() as java.net.HttpURLConnection
+                        connection.connectTimeout = 5000
+                        connection.readTimeout = 5000
+                        val bytes = connection.inputStream.readBytes()
+                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    }
+                    else -> null
+                }
             } catch (_: Exception) {
                 null
             }
-        } else if (imageUrl.startsWith("/")) {
-            try {
-                val file = File(imageUrl)
-                if (file.exists()) {
-                    BitmapFactory.decodeFile(file.absolutePath)
-                } else null
-            } catch (_: Exception) {
-                null
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                bitmap = bmp
             }
-        } else null
+        }
     }
 
     if (bitmap != null) {
         Image(
-            bitmap = bitmap.asImageBitmap(),
+            bitmap = bitmap!!.asImageBitmap(),
             contentDescription = contentDescription,
             modifier = modifier,
             contentScale = ContentScale.Crop
         )
     } else {
-        val context = LocalContext.current
-        val imageRequest = remember(imageUrl) {
-            val model: Any = if (imageUrl.isBlank()) R.drawable.logo else imageUrl
-            ImageRequest.Builder(context)
-                .data(model)
-                .crossfade(true)
-                .fallback(R.drawable.logo)
-                .error(R.drawable.logo)
-                .placeholder(R.drawable.logo)
-                .build()
-        }
-
-        AsyncImage(
-            model = imageRequest,
+        Image(
+            painter = androidx.compose.ui.res.painterResource(id = R.drawable.logo),
             contentDescription = contentDescription,
             modifier = modifier,
             contentScale = ContentScale.Crop
@@ -188,22 +196,13 @@ fun CommuterHome(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                HomeActionCard(
-                    title = "Search Bus",
-                    subtitle = "Find a trip",
-                    icon = Icons.Default.DirectionsBus,
-                    modifier = Modifier.weight(1f),
-                    onClick = onSearchClick
-                )
-                HomeActionCard(
-                    title = "Terminal Map",
-                    subtitle = "Explore stops",
-                    icon = Icons.Default.Map,
-                    modifier = Modifier.weight(1f),
-                    onClick = onSearchClick
-                )
-            }
+            HomeActionCard(
+                title = "Search Bus",
+                subtitle = "Find a trip and book seats",
+                icon = Icons.Default.DirectionsBus,
+                modifier = Modifier.fillMaxWidth(),
+                onClick = onSearchClick
+            )
 
             Spacer(modifier = Modifier.height(20.dp))
 
