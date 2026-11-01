@@ -4,6 +4,8 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
 import android.widget.Toast
+import com.example.myfirstapp.SweetAlertDialog
+import com.example.myfirstapp.SweetAlertType
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -459,16 +461,6 @@ fun DriverManagementScreen(onBack: () -> Unit) {
                                                 fontWeight = FontWeight.Bold
                                             )
                                         }
-
-                                        Spacer(modifier = Modifier.width(4.dp))
-
-                                        // RED TRASH DELETE DRIVER ICON BUTTON
-                                        IconButton(
-                                            onClick = { driverToDelete = driver },
-                                            modifier = Modifier.size(32.dp)
-                                        ) {
-                                            Icon(imageVector = Icons.Default.Delete, contentDescription = "Delete Driver", tint = Color(0xFFC62828), modifier = Modifier.size(20.dp))
-                                        }
                                     }
                                 }
                                 Spacer(modifier = Modifier.height(6.dp))
@@ -524,51 +516,29 @@ fun DriverManagementScreen(onBack: () -> Unit) {
         }
     }
 
-    // DELETE DRIVER CONFIRMATION DIALOG WITH PROMINENT DELETE ICON
+    // DELETE DRIVER CONFIRMATION DIALOG (SWEET ALERT)
     if (driverToDelete != null) {
         val target = driverToDelete!!
-        AlertDialog(
-            onDismissRequest = { driverToDelete = null },
-            containerColor = Color.White,
-            titleContentColor = Color.Black,
-            textContentColor = Color.Black,
-            title = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(imageVector = Icons.Default.Delete, contentDescription = null, tint = Color(0xFFC62828), modifier = Modifier.size(22.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Delete Driver Record", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color(0xFFC62828))
-                }
-            },
-            text = {
-                Text("Are you sure you want to delete driver ${target.driverName} (${target.driverId})? This action will permanently remove the driver record from Cloud Firestore.", fontSize = 14.sp, color = Color.DarkGray)
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        DatabaseManager.deleteDriver(
-                            driverId = target.driverId,
-                            onSuccess = {
-                                Toast.makeText(context, "Driver ${target.driverName} deleted!", Toast.LENGTH_SHORT).show()
-                            },
-                            onFailure = { e ->
-                                Toast.makeText(context, "Failed to delete: ${e.message}", Toast.LENGTH_SHORT).show()
-                            }
-                        )
-                        driverList.remove(target)
-                        driverToDelete = null
+        SweetAlertDialog(
+            type = SweetAlertType.WARNING,
+            title = "Delete Driver?",
+            message = "Are you sure you want to delete driver ${target.driverName} (${target.driverId})? This action will permanently remove the driver record from Cloud Database.",
+            confirmText = "Yes, Delete",
+            cancelText = "Cancel",
+            onConfirm = {
+                DatabaseManager.deleteDriver(
+                    driverId = target.driverId,
+                    onSuccess = {
+                        Toast.makeText(context, "Driver ${target.driverName} deleted!", Toast.LENGTH_SHORT).show()
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828))
-                ) {
-                    Icon(imageVector = Icons.Default.Delete, contentDescription = "Delete", tint = Color.White, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Delete Driver", color = Color.White, fontWeight = FontWeight.Bold)
-                }
+                    onFailure = { e ->
+                        Toast.makeText(context, "Failed to delete: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                )
+                driverList.remove(target)
+                driverToDelete = null
             },
-            dismissButton = {
-                TextButton(onClick = { driverToDelete = null }) {
-                    Text("Cancel", color = Color.DarkGray, fontWeight = FontWeight.Medium)
-                }
-            }
+            onDismiss = { driverToDelete = null }
         )
     }
 

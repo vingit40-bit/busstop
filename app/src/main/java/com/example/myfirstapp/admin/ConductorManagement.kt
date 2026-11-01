@@ -1,6 +1,8 @@
 package com.example.myfirstapp.admin
 
 import android.widget.Toast
+import com.example.myfirstapp.SweetAlertDialog
+import com.example.myfirstapp.SweetAlertType
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -382,38 +384,29 @@ fun ConductorManagementScreen(onBack: () -> Unit) {
         )
     }
 
-    // Delete Confirmation Dialog
+    // Delete Confirmation Dialog (SWEET ALERT)
     if (conductorToDelete != null) {
         val target = conductorToDelete!!
-        AlertDialog(
-            onDismissRequest = { conductorToDelete = null },
-            title = { Text("Delete Conductor") },
-            text = { Text("Are you sure you want to delete ${target.fullName}?") },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        DatabaseManager.deleteConductor(
-                            id = target.id,
-                            onSuccess = {
-                                Toast.makeText(context, "Conductor deleted.", Toast.LENGTH_SHORT).show()
-                                conductorToDelete = null
-                            },
-                            onFailure = { e ->
-                                Toast.makeText(context, "Error: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
-                                conductorToDelete = null
-                            }
-                        )
+        SweetAlertDialog(
+            type = SweetAlertType.WARNING,
+            title = "Delete Conductor?",
+            message = "Are you sure you want to delete conductor ${target.fullName} (${target.employeeId})?",
+            confirmText = "Yes, Delete",
+            cancelText = "Cancel",
+            onConfirm = {
+                DatabaseManager.deleteConductor(
+                    id = target.id,
+                    onSuccess = {
+                        Toast.makeText(context, "Conductor deleted.", Toast.LENGTH_SHORT).show()
+                        conductorToDelete = null
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828))
-                ) {
-                    Text("Delete", color = Color.White)
-                }
+                    onFailure = { e ->
+                        Toast.makeText(context, "Error: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                        conductorToDelete = null
+                    }
+                )
             },
-            dismissButton = {
-                TextButton(onClick = { conductorToDelete = null }) {
-                    Text("Cancel")
-                }
-            }
+            onDismiss = { conductorToDelete = null }
         )
     }
 }

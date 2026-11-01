@@ -823,6 +823,9 @@ object DatabaseManager {
                                 "Unassigned"
                             }
                             matchedBus.assignedDriver = resolvedDriver
+                            if (scheduleDate.isNotBlank()) {
+                                matchedBus.operator = scheduleDate
+                            }
 
                             val scheduleObj = BusSchedule(scheduleId, matchedBus, matchedRoute, departureTime, arrivalTime)
                             scheduleObj.status = status

@@ -3,6 +3,7 @@ package com.example.myfirstapp
 import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.ui.platform.LocalContext
@@ -96,6 +97,33 @@ fun MainApp() {
 
     var currentScreen by remember { mutableStateOf(ScreenState.LOGIN) }
     var loggedInUser by remember { mutableStateOf<user?>(null) }
+    var showExitDialog by remember { mutableStateOf(false) }
+
+    BackHandler(enabled = true) {
+        when (currentScreen) {
+            ScreenState.SIGN_UP -> {
+                currentScreen = ScreenState.LOGIN
+            }
+            ScreenState.LOGIN, ScreenState.HOME -> {
+                showExitDialog = true
+            }
+        }
+    }
+
+    if (showExitDialog) {
+        SweetAlertDialog(
+            type = SweetAlertType.CONFIRM,
+            title = "Exit TransitGo?",
+            message = "Are you sure you want to exit TransitGo?",
+            confirmText = "Yes, Exit",
+            cancelText = "Cancel",
+            onConfirm = {
+                showExitDialog = false
+                (context as? ComponentActivity)?.finish()
+            },
+            onDismiss = { showExitDialog = false }
+        )
+    }
 
     fun handleLoginSuccess(user: user) {
         loggedInUser = user

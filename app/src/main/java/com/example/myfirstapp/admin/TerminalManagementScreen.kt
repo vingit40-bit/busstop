@@ -6,6 +6,8 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Base64
 import android.widget.Toast
+import com.example.myfirstapp.SweetAlertDialog
+import com.example.myfirstapp.SweetAlertType
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -446,45 +448,29 @@ fun TerminalManagementScreen(onBack: () -> Unit) {
         }
     }
 
-    // DELETE TERMINAL CONFIRMATION DIALOG
+    // DELETE TERMINAL CONFIRMATION DIALOG (SWEET ALERT)
     if (terminalToDelete != null) {
         val target = terminalToDelete!!
-        AlertDialog(
-            onDismissRequest = { terminalToDelete = null },
-            containerColor = Color.White,
-            titleContentColor = Color.Black,
-            textContentColor = Color.Black,
-            title = {
-                Text("Delete Terminal Hub", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color(0xFFC62828))
-            },
-            text = {
-                Text("Are you sure you want to delete ${target.stopName} (${target.stopId})? This action will permanently remove the terminal hub record from Cloud Firestore.", fontSize = 14.sp, color = Color.DarkGray)
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        DatabaseManager.deleteBusStop(
-                            stopId = target.stopId,
-                            onSuccess = {
-                                Toast.makeText(context, "Terminal ${target.stopName} deleted!", Toast.LENGTH_SHORT).show()
-                            },
-                            onFailure = { e ->
-                                Toast.makeText(context, "Failed to delete: ${e.message}", Toast.LENGTH_SHORT).show()
-                            }
-                        )
-                        terminalList.remove(target)
-                        terminalToDelete = null
+        SweetAlertDialog(
+            type = SweetAlertType.WARNING,
+            title = "Delete Terminal?",
+            message = "Are you sure you want to delete ${target.stopName} (${target.stopId})? This action will permanently remove the terminal hub record from Cloud Database.",
+            confirmText = "Yes, Delete",
+            cancelText = "Cancel",
+            onConfirm = {
+                DatabaseManager.deleteBusStop(
+                    stopId = target.stopId,
+                    onSuccess = {
+                        Toast.makeText(context, "Terminal ${target.stopName} deleted!", Toast.LENGTH_SHORT).show()
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828))
-                ) {
-                    Text("Delete", color = Color.White, fontWeight = FontWeight.Bold)
-                }
+                    onFailure = { e ->
+                        Toast.makeText(context, "Failed to delete: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                )
+                terminalList.remove(target)
+                terminalToDelete = null
             },
-            dismissButton = {
-                TextButton(onClick = { terminalToDelete = null }) {
-                    Text("Cancel", color = Color.DarkGray, fontWeight = FontWeight.Medium)
-                }
-            }
+            onDismiss = { terminalToDelete = null }
         )
     }
 

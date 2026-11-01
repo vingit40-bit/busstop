@@ -6,6 +6,8 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Base64
 import android.widget.Toast
+import com.example.myfirstapp.SweetAlertDialog
+import com.example.myfirstapp.SweetAlertType
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -412,49 +414,29 @@ fun BusManagementScreen(onBack: () -> Unit) {
         }
     }
 
-    // DELETE BUS CONFIRMATION DIALOG
+    // DELETE BUS CONFIRMATION DIALOG (SWEET ALERT)
     if (busToDelete != null) {
         val targetBus = busToDelete!!
-        AlertDialog(
-            onDismissRequest = { busToDelete = null },
-            containerColor = Color.White,
-            titleContentColor = Color.Black,
-            textContentColor = Color.Black,
-            title = {
-                Text("Delete Bus", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color(0xFFC62828))
-            },
-            text = {
-                Text(
-                    "Are you sure you want to delete ${if (targetBus.operator.isNotBlank()) targetBus.operator else targetBus.busNumber} (${targetBus.busId})? This action will remove the record permanently from Cloud Firestore.",
-                    fontSize = 14.sp,
-                    color = Color.DarkGray
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        DatabaseManager.deleteBus(
-                            busId = targetBus.busId,
-                            onSuccess = {
-                                Toast.makeText(context, "Bus ${targetBus.busId} deleted!", Toast.LENGTH_SHORT).show()
-                            },
-                            onFailure = { e ->
-                                Toast.makeText(context, "Failed to delete: ${e.message}", Toast.LENGTH_SHORT).show()
-                            }
-                        )
-                        busList.remove(targetBus)
-                        busToDelete = null
+        SweetAlertDialog(
+            type = SweetAlertType.WARNING,
+            title = "Delete Bus?",
+            message = "Are you sure you want to delete ${if (targetBus.operator.isNotBlank()) targetBus.operator else targetBus.busNumber} (${targetBus.busId})? This action will remove the record permanently from Cloud Database.",
+            confirmText = "Yes, Delete",
+            cancelText = "Cancel",
+            onConfirm = {
+                DatabaseManager.deleteBus(
+                    busId = targetBus.busId,
+                    onSuccess = {
+                        Toast.makeText(context, "Bus ${targetBus.busId} deleted!", Toast.LENGTH_SHORT).show()
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828))
-                ) {
-                    Text("Delete", color = Color.White, fontWeight = FontWeight.Bold)
-                }
+                    onFailure = { e ->
+                        Toast.makeText(context, "Failed to delete: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                )
+                busList.remove(targetBus)
+                busToDelete = null
             },
-            dismissButton = {
-                TextButton(onClick = { busToDelete = null }) {
-                    Text("Cancel", color = Color.DarkGray, fontWeight = FontWeight.Medium)
-                }
-            }
+            onDismiss = { busToDelete = null }
         )
     }
 

@@ -6,6 +6,8 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
+import com.example.myfirstapp.SweetAlertDialog
+import com.example.myfirstapp.SweetAlertType
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -273,45 +275,29 @@ fun RouteManagementScreen(onBack: () -> Unit = {}) {
         }
     }
 
-    // DELETE ROUTE CONFIRMATION DIALOG
+    // DELETE ROUTE CONFIRMATION DIALOG (SWEET ALERT)
     if (routeToDelete != null) {
         val target = routeToDelete!!
-        AlertDialog(
-            onDismissRequest = { routeToDelete = null },
-            containerColor = Color.White,
-            titleContentColor = Color.Black,
-            textContentColor = Color.Black,
-            title = {
-                Text("Delete Route", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color(0xFFC62828))
-            },
-            text = {
-                Text("Are you sure you want to delete ${target.routeName} (${target.routeId})? This action will permanently remove the route from Cloud Firestore.", fontSize = 14.sp, color = Color.DarkGray)
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        DatabaseManager.deleteBusRoute(
-                            routeId = target.routeId,
-                            onSuccess = {
-                                Toast.makeText(context, "Route ${target.routeId} deleted!", Toast.LENGTH_SHORT).show()
-                            },
-                            onFailure = { e ->
-                                Toast.makeText(context, "Failed to delete: ${e.message}", Toast.LENGTH_SHORT).show()
-                            }
-                        )
-                        routeList.remove(target)
-                        routeToDelete = null
+        SweetAlertDialog(
+            type = SweetAlertType.WARNING,
+            title = "Delete Route?",
+            message = "Are you sure you want to delete ${target.routeName} (${target.routeId})? This action will permanently remove the route from Cloud Firestore.",
+            confirmText = "Yes, Delete",
+            cancelText = "Cancel",
+            onConfirm = {
+                DatabaseManager.deleteBusRoute(
+                    routeId = target.routeId,
+                    onSuccess = {
+                        Toast.makeText(context, "Route ${target.routeId} deleted!", Toast.LENGTH_SHORT).show()
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828))
-                ) {
-                    Text("Delete", color = Color.White, fontWeight = FontWeight.Bold)
-                }
+                    onFailure = { e ->
+                        Toast.makeText(context, "Failed to delete: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                )
+                routeList.remove(target)
+                routeToDelete = null
             },
-            dismissButton = {
-                TextButton(onClick = { routeToDelete = null }) {
-                    Text("Cancel", color = Color.DarkGray, fontWeight = FontWeight.Medium)
-                }
-            }
+            onDismiss = { routeToDelete = null }
         )
     }
 

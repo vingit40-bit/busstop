@@ -1,6 +1,8 @@
 package com.example.myfirstapp.admin
 
 import android.widget.Toast
+import com.example.myfirstapp.SweetAlertDialog
+import com.example.myfirstapp.SweetAlertType
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.Manifest
@@ -169,7 +171,7 @@ fun ScheduleManagementScreen(user: user? = null, onBack: () -> Unit = {}) {
                             arrivalTime = s.arrivalTime,
                             status = s.status,
                             rejectionReason = s.rejectionReason,
-                            dateDay = if (s.bus.operator.isNotBlank()) s.bus.operator else todayFullDateStr
+                            dateDay = if (s.scheduleDate.isNotBlank()) s.scheduleDate else if (s.bus.operator.isNotBlank()) s.bus.operator else todayFullDateStr
                         )
                     )
                 }
@@ -1045,6 +1047,7 @@ fun ScheduleManagementScreen(user: user? = null, onBack: () -> Unit = {}) {
                         )
 
                         val sampleBus = Bus(autoScheduleId, selectedBus, 50, selectedStatus)
+                        sampleBus.operator = scheduleDateInput.trim()
                         sampleBus.assignedDriver = selectedDriver
                         val sampleRoute = BusRoute("R01", selectedRoute, "Origin", "Destination")
                         val busScheduleObj = BusSchedule(
@@ -1055,6 +1058,7 @@ fun ScheduleManagementScreen(user: user? = null, onBack: () -> Unit = {}) {
                             arrivalTime = arrivalTime.trim()
                         )
                         busScheduleObj.status = selectedStatus
+                        busScheduleObj.scheduleDate = scheduleDateInput.trim()
                         DatabaseManager.saveBusSchedule(
                             busScheduleObj,
                             driverName = selectedDriver,
@@ -1094,51 +1098,29 @@ fun ScheduleManagementScreen(user: user? = null, onBack: () -> Unit = {}) {
         )
     }
 
-    // DELETE SCHEDULE CONFIRMATION DIALOG
+    // DELETE SCHEDULE CONFIRMATION DIALOG (SWEET ALERT)
     if (scheduleToDelete != null) {
         val targetToDelete = scheduleToDelete!!
-        AlertDialog(
-            onDismissRequest = { scheduleToDelete = null },
-            containerColor = Color.White,
-            titleContentColor = Color.Black,
-            textContentColor = Color.Black,
-            title = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(imageVector = Icons.Default.Delete, contentDescription = null, tint = Color(0xFFC62828), modifier = Modifier.size(22.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Delete Bus Schedule", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color(0xFFC62828))
-                }
-            },
-            text = {
-                Text("Are you sure you want to delete Schedule ${targetToDelete.scheduleId} (${targetToDelete.busNumber})? This action will remove the record permanently from Cloud Firestore.", fontSize = 14.sp, color = Color.DarkGray)
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        DatabaseManager.deleteBusSchedule(
-                            scheduleId = targetToDelete.scheduleId,
-                            onSuccess = {
-                                Toast.makeText(context, "Schedule ${targetToDelete.scheduleId} deleted!", Toast.LENGTH_SHORT).show()
-                            },
-                            onFailure = { e ->
-                                Toast.makeText(context, "Failed to delete: ${e.message}", Toast.LENGTH_SHORT).show()
-                            }
-                        )
-                        scheduleList.removeIf { it.scheduleId == targetToDelete.scheduleId }
-                        scheduleToDelete = null
+        SweetAlertDialog(
+            type = SweetAlertType.WARNING,
+            title = "Delete Schedule?",
+            message = "Are you sure you want to delete Schedule ${targetToDelete.scheduleId} (${targetToDelete.busNumber})? This action will remove the record permanently from Cloud Database.",
+            confirmText = "Yes, Delete",
+            cancelText = "Cancel",
+            onConfirm = {
+                DatabaseManager.deleteBusSchedule(
+                    scheduleId = targetToDelete.scheduleId,
+                    onSuccess = {
+                        Toast.makeText(context, "Schedule ${targetToDelete.scheduleId} deleted!", Toast.LENGTH_SHORT).show()
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828))
-                ) {
-                    Icon(imageVector = Icons.Default.Delete, contentDescription = "Delete", tint = Color.White, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Delete Schedule", color = Color.White, fontWeight = FontWeight.Bold)
-                }
+                    onFailure = { e ->
+                        Toast.makeText(context, "Failed to delete: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                )
+                scheduleList.removeIf { it.scheduleId == targetToDelete.scheduleId }
+                scheduleToDelete = null
             },
-            dismissButton = {
-                TextButton(onClick = { scheduleToDelete = null }) {
-                    Text("Cancel", color = Color.DarkGray, fontWeight = FontWeight.Medium)
-                }
-            }
+            onDismiss = { scheduleToDelete = null }
         )
     }
 }
