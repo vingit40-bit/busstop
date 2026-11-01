@@ -58,13 +58,6 @@ fun ConductorDashboardScreen(
                     onClick = { selectedTab = "Headcount" },
                     colors = NavigationBarItemDefaults.colors(selectedIconColor = ConductorGreen)
                 )
-                NavigationBarItem(
-                    icon = { Icon(Icons.Default.Commute, contentDescription = "Ops") },
-                    label = { Text("Ops") },
-                    selected = selectedTab == "Ops",
-                    onClick = { selectedTab = "Ops" },
-                    colors = NavigationBarItemDefaults.colors(selectedIconColor = ConductorGreen)
-                )
             }
         },
         containerColor = ConductorBg
@@ -74,7 +67,6 @@ fun ConductorDashboardScreen(
                 "Trips" -> ConductorTripsScreen()
                 "Ticketing" -> ConductorTicketingScreen()
                 "Headcount" -> ConductorHeadcountScreen()
-                "Ops" -> ConductorOpsScreen()
             }
         }
     }

@@ -18,6 +18,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -26,6 +27,7 @@ import androidx.compose.ui.unit.sp
 import com.example.myfirstapp.BookingRecord
 import com.example.myfirstapp.BusSchedule
 import com.example.myfirstapp.DatabaseManager
+import com.example.myfirstapp.PaymentSettings
 import com.example.myfirstapp.TransitGreen
 
 data class SeatItem(
@@ -43,11 +45,21 @@ fun SelectSeatScreen(
     val context = LocalContext.current
     val unitFare = if (schedule.route.fare > 0) schedule.route.fare else schedule.route.calculateEstimatedFare()
 
-    val maxCapacity = 32
+    val maxCapacity = if (schedule.bus.capacity > 0) schedule.bus.capacity else 50
     var occupiedSeatNumbers by remember { mutableStateOf(setOf<Int>()) }
 
     var paymentMethod by remember { mutableStateOf("Cash") } // "Cash", "GCash", "PayMaya"
     var receiptUriStr by remember { mutableStateOf("") }
+    var paymentSettings by remember { mutableStateOf(PaymentSettings()) }
+
+    LaunchedEffect(Unit) {
+        DatabaseManager.listenToPaymentSettings(
+            onUpdate = { settings ->
+                paymentSettings = settings
+            },
+            onError = {}
+        )
+    }
 
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -63,7 +75,7 @@ fun SelectSeatScreen(
             onUpdate = { bookings ->
                 val booked = mutableSetOf<Int>()
                 bookings.forEach { b ->
-                    if (b.busId == schedule.bus.busNumber || b.busId.isBlank()) {
+                    if (com.example.myfirstapp.isBookingForBus(b.busId, schedule.bus.busNumber, schedule.bus.busId, schedule.bus.plateNumber)) {
                         b.seats.split(",").forEach { s ->
                             s.trim().toIntOrNull()?.let { booked.add(it) }
                         }
@@ -133,6 +145,33 @@ fun SelectSeatScreen(
                     }
 
                     if (paymentMethod != "Cash") {
+                        val accNo = if (paymentMethod == "GCash") paymentSettings.gcashNumber else paymentSettings.paymayaNumber
+                        val qrUrl = if (paymentMethod == "GCash") paymentSettings.gcashQrUrl else paymentSettings.paymayaQrUrl
+
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFFF1F8E9)),
+                            border = BorderStroke(1.dp, TransitGreen)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text("Scan $paymentMethod Official QR Code to Pay", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = TransitGreen)
+                                Text("Account No: $accNo", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.Black)
+                                if (qrUrl.isNotBlank()) {
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    BusThumbnail(
+                                        imageUrl = qrUrl,
+                                        contentDescription = "$paymentMethod QR Code",
+                                        modifier = Modifier.size(130.dp).clip(RoundedCornerShape(8.dp))
+                                    )
+                                }
+                            }
+                        }
+
                         Spacer(modifier = Modifier.height(6.dp))
                         OutlinedButton(
                             onClick = {

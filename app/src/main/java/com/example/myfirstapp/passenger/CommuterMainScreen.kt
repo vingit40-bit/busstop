@@ -144,7 +144,11 @@ fun CommuterMainScreen(
                 "Home" -> CommuterHome(
                     user = user,
                     onLogout = onLogout,
-                    onSearchClick = { flowStep = "Search" }
+                    onSearchClick = { flowStep = "Search" },
+                    onBusSelected = { sched ->
+                        activeSelectedSchedule = sched
+                        flowStep = "SelectSeat"
+                    }
                 )
                 "Bookings" -> {
                     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {

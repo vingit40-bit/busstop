@@ -65,11 +65,13 @@ fun ConductorHeadcountScreen() {
     // Sync live occupied seats for selected schedule from Supabase bookings
     LaunchedEffect(currentSched, allBookings) {
         if (currentSched != null) {
-            val bId = currentSched.bus.busId.trim()
+            val bNum = currentSched.bus.busNumber
+            val bId = currentSched.bus.busId
+            val bPlate = currentSched.bus.plateNumber
 
             val bookedSet = mutableSetOf<Int>()
             allBookings.forEach { b ->
-                if (b.busId.trim().equals(busNum, ignoreCase = true) || b.busId.trim().equals(bId, ignoreCase = true)) {
+                if (com.example.myfirstapp.isBookingForBus(b.busId, bNum, bId, bPlate)) {
                     b.seats.split(",").forEach { s ->
                         s.trim().toIntOrNull()?.let { bookedSet.add(it) }
                     }

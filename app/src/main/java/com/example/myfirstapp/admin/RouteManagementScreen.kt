@@ -67,14 +67,6 @@ fun RouteManagementScreen(onBack: () -> Unit = {}) {
     var trackingRoute by remember { mutableStateOf<BusRoute?>(null) }
     var routeToDelete by remember { mutableStateOf<BusRoute?>(null) }
 
-    val initialDefaultRoutes = remember {
-        listOf(
-            BusRoute("R-101", "Route A01: City Terminal ➔ Airport Hub", "Central Terminal - Manila", "Airport Hub - NAIA Pasay", "Active", 14.5995, 120.9842, 14.5204, 121.0122),
-            BusRoute("R-102", "Route B02: Cubao Station ➔ PITX Express", "Cubao Bus Station", "PITX Terminal", "Active", 14.6195, 121.0511, 14.5092, 120.9917),
-            BusRoute("R-103", "Route C03: Palico Terminal ➔ GMQ Lemery", "Palico Grand Terminal", "GMQ LEMERY BATANGAS", "Active", 14.0728, 120.6983, 13.8822, 120.9111)
-        )
-    }
-
     val routeList = remember { mutableStateListOf<BusRoute>() }
 
     // Live sync directly with Cloud Firestore database

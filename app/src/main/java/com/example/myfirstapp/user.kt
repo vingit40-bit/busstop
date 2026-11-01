@@ -4,7 +4,7 @@ class user(
     val userId: String,
     var fullname: String,
     var email: String,
-    private var password: String,
+    var password: String,
     var role: String
 ) {
     fun verifyPassword(input: String): Boolean {

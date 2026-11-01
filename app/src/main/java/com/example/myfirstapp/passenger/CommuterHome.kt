@@ -2,16 +2,16 @@ package com.example.myfirstapp.passenger
 
 import android.graphics.BitmapFactory
 import android.util.Base64
+import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.*
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,17 +19,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
+import com.example.myfirstapp.BookingRecord
+import com.example.myfirstapp.Bus
 import com.example.myfirstapp.BusSchedule
 import com.example.myfirstapp.DatabaseManager
-import com.example.myfirstapp.R
 import com.example.myfirstapp.TransitGreen
+import com.example.myfirstapp.isBookingForBus
 import com.example.myfirstapp.user
 import java.io.File
 import java.text.SimpleDateFormat
@@ -91,12 +92,20 @@ fun BusThumbnail(
             contentScale = ContentScale.Crop
         )
     } else {
-        Image(
-            painter = androidx.compose.ui.res.painterResource(id = R.drawable.logo),
-            contentDescription = contentDescription,
+        Surface(
             modifier = modifier,
-            contentScale = ContentScale.Crop
-        )
+            shape = RoundedCornerShape(8.dp),
+            color = Color(0xFFE8F5EC)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = Icons.Default.DirectionsBus,
+                    contentDescription = contentDescription,
+                    tint = TransitGreen,
+                    modifier = Modifier.size(26.dp)
+                )
+            }
+        }
     }
 }
 
@@ -128,9 +137,13 @@ private fun HomeActionCard(
 fun CommuterHome(
     user: user,
     onLogout: () -> Unit,
-    onSearchClick: () -> Unit = {}
+    onSearchClick: () -> Unit = {},
+    onBusSelected: (BusSchedule) -> Unit = {}
 ) {
+    val context = LocalContext.current
     var schedules by remember { mutableStateOf<List<BusSchedule>>(emptyList()) }
+    var registeredBuses by remember { mutableStateOf<List<Bus>>(emptyList()) }
+    var allBookings by remember { mutableStateOf<List<BookingRecord>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf("") }
 
@@ -149,6 +162,24 @@ fun CommuterHome(
                 isLoading = false
             }
         )
+        DatabaseManager.listenToBuses(
+            onUpdate = { buses ->
+                registeredBuses = buses
+            },
+            onError = {}
+        )
+        DatabaseManager.listenToBookings(
+            onUpdate = { bookings ->
+                allBookings = bookings
+            },
+            onError = {}
+        )
+    }
+
+    val todaySchedules = remember(schedules) {
+        schedules.filter { sched ->
+            !sched.status.equals("Rejected", ignoreCase = true) && !sched.status.equals("Cancelled", ignoreCase = true)
+        }
     }
 
     Scaffold(
@@ -174,6 +205,7 @@ fun CommuterHome(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
             // Destination search, matching the compact TransitGo home layout.
@@ -272,24 +304,40 @@ fun CommuterHome(
             Spacer(modifier = Modifier.height(10.dp))
 
             if (isLoading) {
-                Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Box(modifier = Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = TransitGreen)
                 }
             } else if (errorMessage.isNotEmpty()) {
                 Text(text = errorMessage, color = Color.Red, fontSize = 14.sp)
-            } else if (schedules.isEmpty()) {
-                Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+            } else if (todaySchedules.isEmpty()) {
+                Box(modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
                     Text("No bus schedules available today.", color = Color.Gray, fontSize = 15.sp)
                 }
             } else {
-                LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.fillMaxWidth().weight(1f)
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    items(schedules) { schedule ->
+                    todaySchedules.forEach { schedule ->
+                        val fareDisplay = if (schedule.route.fare > 0) schedule.route.fare else schedule.route.calculateEstimatedFare()
+                        val tripDurationText = calculateTripDurationFormatted(schedule.departureTime, schedule.arrivalTime)
+
+                        val totalCapacity = if (schedule.bus.capacity > 0) schedule.bus.capacity else 50
+                        val busBookedSeats = allBookings
+                            .filter { isBookingForBus(it.busId, schedule.bus.busNumber, schedule.bus.busId, schedule.bus.plateNumber) }
+                            .flatMap { it.seats.split(",") }
+                            .mapNotNull { it.trim().toIntOrNull() }
+                            .toSet()
+                        val remainingSeats = (totalCapacity - busBookedSeats.size).coerceAtLeast(0)
+                        val isFullyBooked = remainingSeats <= 0
+
+                        val busImgUrl = schedule.bus.imageUrl.ifBlank {
+                            registeredBuses.find { b -> schedule.bus.busNumber.contains(b.busNumber, ignoreCase = true) || schedule.bus.busNumber.contains(b.busId, ignoreCase = true) }?.imageUrl ?: ""
+                        }
+
                         Card(
                             modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(14.dp),
                             colors = CardDefaults.cardColors(containerColor = Color.White),
                             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                         ) {
@@ -301,7 +349,7 @@ fun CommuterHome(
                                 ) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         BusThumbnail(
-                                            imageUrl = schedule.bus.imageUrl,
+                                            imageUrl = busImgUrl,
                                             contentDescription = "Bus Image",
                                             modifier = Modifier
                                                 .size(48.dp)
@@ -309,49 +357,81 @@ fun CommuterHome(
                                         )
                                         Spacer(modifier = Modifier.width(10.dp))
                                         Column {
-                                            Text("Bus: ${schedule.bus.busNumber}", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.Black)
-                                            Text(schedule.bus.busType.ifBlank { "Air-conditioned" }, fontSize = 11.sp, color = Color.Gray)
+                                            Text(
+                                                text = "${schedule.departureTime} - ${schedule.arrivalTime}",
+                                                fontWeight = FontWeight.ExtraBold,
+                                                fontSize = 16.sp,
+                                                color = Color.Black
+                                            )
+                                            Text(tripDurationText, fontSize = 12.sp, color = Color.Gray)
                                         }
                                     }
-                                    Surface(
-                                        shape = RoundedCornerShape(8.dp),
-                                        color = when (schedule.status) {
-                                            "In Transit" -> Color(0xFF2196F3)
-                                            "Completed" -> Color(0xFF4CAF50)
-                                            "Accepted" -> Color(0xFF116530)
-                                            else -> Color(0xFFFF9800)
-                                        }
-                                    ) {
-                                        Text(
-                                            text = schedule.status,
-                                            color = Color.White,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                        )
-                                    }
+                                    Text(
+                                        text = "₱%.0f".format(fareDisplay),
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 18.sp,
+                                        color = TransitGreen
+                                    )
                                 }
 
                                 Spacer(modifier = Modifier.height(8.dp))
-                                Text("Route: ${schedule.route.routeName}", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color.DarkGray)
-                                Spacer(modifier = Modifier.height(4.dp))
+                                HorizontalDivider(color = Color(0xFFF0F2F0))
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Text(
+                                    text = "Route: ${schedule.route.routeName}",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color.DarkGray
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "Driver: ${schedule.bus.assignedDriver}",
+                                    fontSize = 11.sp,
+                                    color = Color.Gray
+                                )
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Default.Schedule, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(16.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Dep: ${schedule.departureTime}", fontSize = 13.sp, color = Color.DarkGray)
+                                    Column {
+                                        Text(
+                                            text = "Bus: ${schedule.bus.busNumber} • ${schedule.bus.busType.ifBlank { "Air-conditioned" }}",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color.DarkGray
+                                        )
+                                        Text(
+                                            text = "Remaining Seats: $remainingSeats / $totalCapacity",
+                                            fontSize = 12.sp,
+                                            color = if (!isFullyBooked) TransitGreen else Color(0xFFC62828),
+                                            fontWeight = FontWeight.Bold
+                                        )
                                     }
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Default.Schedule, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(16.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Arr: ${schedule.arrivalTime}", fontSize = 13.sp, color = Color.DarkGray)
+
+                                    Button(
+                                        onClick = {
+                                            if (isFullyBooked) {
+                                                Toast.makeText(context, "Bus is fully booked! No available seats.", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                onBusSelected(schedule)
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (isFullyBooked) Color.Gray else TransitGreen
+                                        ),
+                                        shape = RoundedCornerShape(10.dp),
+                                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                                    ) {
+                                        Text(if (isFullyBooked) "Full" else "Select", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                        Spacer(modifier = Modifier.width(2.dp))
+                                        Icon(imageVector = Icons.Default.ChevronRight, contentDescription = "Select", modifier = Modifier.size(18.dp))
                                     }
                                 }
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text("Driver: ${schedule.bus.assignedDriver}", fontSize = 12.sp, color = Color.Gray)
                             }
                         }
                     }

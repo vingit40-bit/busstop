@@ -7,6 +7,9 @@ import org.json.JSONObject
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 data class DriverRecord(
     val driverId: String,
@@ -44,6 +47,50 @@ data class BookingRecord(
     val paymentMethod: String = "Cash",
     val receiptUrl: String = "",
     val paymentStatus: String = "Pending"
+)
+
+data class LiveBusLocation(
+    val busId: String,
+    val busNumber: String,
+    val driverName: String,
+    val routeName: String,
+    val latitude: Double,
+    val longitude: Double,
+    val speedKmh: Float,
+    val heading: Float,
+    val status: String,
+    val timestamp: Long = System.currentTimeMillis()
+) {
+    fun isOffline(): Boolean {
+        return (System.currentTimeMillis() - timestamp) > 120_000L // 2 minutes stale threshold
+    }
+
+    fun computedStatus(): String {
+        if (isOffline()) return "Offline"
+        return if (speedKmh > 3.0f) "Moving" else "Stopped"
+    }
+}
+
+fun isBookingForBus(bookingBusId: String, targetBusNumber: String, targetBusId: String = "", targetPlateNumber: String = ""): Boolean {
+    val cleanBkg = bookingBusId.trim().lowercase()
+    val cleanNum = targetBusNumber.trim().lowercase()
+    val cleanId = targetBusId.trim().lowercase()
+    val cleanPlate = targetPlateNumber.trim().lowercase()
+
+    if (cleanBkg.isBlank()) return true
+    if (cleanNum.isNotBlank() && (cleanBkg.contains(cleanNum) || cleanNum.contains(cleanBkg))) return true
+    if (cleanId.isNotBlank() && (cleanBkg.contains(cleanId) || cleanId.contains(cleanBkg))) return true
+    if (cleanPlate.isNotBlank() && (cleanBkg.contains(cleanPlate) || cleanPlate.contains(cleanBkg))) return true
+
+    return false
+}
+
+data class PaymentSettings(
+    val id: String = "default_settings",
+    val gcashNumber: String = "0917-123-4567",
+    val gcashQrUrl: String = "",
+    val paymayaNumber: String = "0918-987-6543",
+    val paymayaQrUrl: String = ""
 )
 
 data class LocationSuggestion(
@@ -157,7 +204,7 @@ object DatabaseManager {
                 put("fullname", user.fullname)
                 put("email", user.email)
                 put("role", user.role)
-                put("password", "")
+                put("password", user.password)
             }.toString()
 
             try {
@@ -766,7 +813,9 @@ object DatabaseManager {
                             val cleanRouteName = routeName.trim().lowercase()
                             val matchedRoute = routeMap[cleanRouteName] ?: routeMap.values.find { it.routeName.trim().lowercase().contains(cleanRouteName) } ?: BusRoute("R01", routeName, startP, destP)
 
-                            val resolvedDriver = if (driverName.isNotBlank() && driverName != "Unassigned") {
+                            val resolvedDriver = if (status.equals("Rejected", ignoreCase = true)) {
+                                driverName
+                            } else if (driverName.isNotBlank() && driverName != "Unassigned") {
                                 driverName
                             } else if (matchedBus.assignedDriver.isNotBlank() && matchedBus.assignedDriver != "Unassigned") {
                                 matchedBus.assignedDriver
@@ -778,8 +827,10 @@ object DatabaseManager {
                             val scheduleObj = BusSchedule(scheduleId, matchedBus, matchedRoute, departureTime, arrivalTime)
                             scheduleObj.status = status
                             scheduleObj.rejectionReason = rejectionReason
+                            scheduleObj.scheduleDate = scheduleDate
                             list.add(scheduleObj)
                         }
+
                         withContext(Dispatchers.Main) { onUpdate(list) }
                     } catch (e: Exception) {
                         withContext(Dispatchers.Main) { onError(e) }
@@ -828,13 +879,16 @@ object DatabaseManager {
     fun updateScheduleRejection(
         scheduleId: String,
         reason: String,
+        driverName: String = "",
         onSuccess: () -> Unit = {},
         onFailure: (Exception) -> Unit = {}
     ) {
         ioScope.launch {
             val jsonObj = JSONObject().apply {
                 put("status", "Rejected")
-                put("driver_name", "Unassigned")
+                if (driverName.isNotBlank()) {
+                    put("driver_name", driverName)
+                }
                 put("rejection_reason", reason)
             }.toString()
 
@@ -842,7 +896,9 @@ object DatabaseManager {
             if (res == null) {
                 val fallbackJson = JSONObject().apply {
                     put("status", "Rejected")
-                    put("driver_name", "Unassigned")
+                    if (driverName.isNotBlank()) {
+                        put("driver_name", driverName)
+                    }
                 }.toString()
                 res = makeRequest("bus_schedules?schedule_id=eq.$scheduleId", "PATCH", fallbackJson)
             }
@@ -1222,6 +1278,136 @@ object DatabaseManager {
             "data:image/jpeg;base64," + android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
         } catch (_: Exception) {
             ""
+        }
+    }
+
+    // --- PAYMENT SETTINGS (GCash / PayMaya QR Management) ---
+    fun savePaymentSettings(
+        settings: PaymentSettings,
+        onSuccess: () -> Unit = {},
+        onFailure: (Exception) -> Unit = {}
+    ) {
+        ioScope.launch {
+            val json = JSONObject().apply {
+                put("id", settings.id)
+                put("gcash_number", settings.gcashNumber)
+                put("gcash_qr_url", settings.gcashQrUrl)
+                put("paymaya_number", settings.paymayaNumber)
+                put("paymaya_qr_url", settings.paymayaQrUrl)
+            }.toString()
+
+            val res = makeRequest("payment_settings", "POST", json)
+            withContext(Dispatchers.Main) {
+                if (res != null) onSuccess() else onFailure(Exception("Failed to save payment settings"))
+            }
+        }
+    }
+
+    fun listenToPaymentSettings(
+        onUpdate: (PaymentSettings) -> Unit,
+        onError: (Exception) -> Unit = {}
+    ) {
+        ioScope.launch {
+            while (isActive) {
+                val res = makeRequest("payment_settings?select=*", "GET")
+                if (res != null) {
+                    try {
+                        val arr = JSONArray(res)
+                        if (arr.length() > 0) {
+                            val obj = arr.getJSONObject(0)
+                            val settings = PaymentSettings(
+                                id = obj.safeString("id", "default_settings"),
+                                gcashNumber = obj.safeString("gcash_number", "0917-123-4567"),
+                                gcashQrUrl = obj.safeString("gcash_qr_url", ""),
+                                paymayaNumber = obj.safeString("paymaya_number", "0918-987-6543"),
+                                paymayaQrUrl = obj.safeString("paymaya_qr_url", "")
+                            )
+                            withContext(Dispatchers.Main) { onUpdate(settings) }
+                        }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) { onError(e) }
+                    }
+                }
+                delay(5000)
+            }
+        }
+    }
+
+    // --- REAL-TIME BUS GPS TRACKING ---
+    private val liveGpsMap = java.util.concurrent.ConcurrentHashMap<String, LiveBusLocation>()
+
+    fun updateBusGpsLocation(
+        location: LiveBusLocation,
+        onSuccess: () -> Unit = {},
+        onFailure: (Exception) -> Unit = {}
+    ) {
+        liveGpsMap[location.busId.trim().lowercase()] = location
+        liveGpsMap[location.busNumber.trim().lowercase()] = location
+
+        ioScope.launch {
+            val json = JSONObject().apply {
+                put("bus_id", location.busId)
+                put("bus_number", location.busNumber)
+                put("driver_name", location.driverName)
+                put("route_name", location.routeName)
+                put("latitude", location.latitude)
+                put("longitude", location.longitude)
+                put("speed_kmh", location.speedKmh)
+                put("heading", location.heading)
+                put("status", location.computedStatus())
+                put("timestamp", location.timestamp)
+            }.toString()
+
+            try {
+                var res = makeRequest("bus_locations?bus_id=eq.${location.busId}", "PATCH", json)
+                if (res == null) {
+                    res = makeRequest("bus_locations", "POST", json)
+                }
+                withContext(Dispatchers.Main) { onSuccess() }
+            } catch (_: Exception) {
+                withContext(Dispatchers.Main) { onSuccess() }
+            }
+        }
+    }
+
+    fun listenToLiveBusLocations(
+        onUpdate: (List<LiveBusLocation>) -> Unit,
+        onError: (Exception) -> Unit = {}
+    ) {
+        ioScope.launch {
+            while (isActive) {
+                val res = makeRequest("bus_locations?select=*", "GET")
+                if (res != null) {
+                    try {
+                        val arr = JSONArray(res)
+                        for (i in 0 until arr.length()) {
+                            val obj = arr.getJSONObject(i)
+                            val bId = obj.safeString("bus_id")
+                            val bNum = obj.safeString("bus_number")
+                            val dName = obj.safeString("driver_name")
+                            val rName = obj.safeString("route_name")
+                            val lat = obj.optDouble("latitude", 0.0)
+                            val lng = obj.optDouble("longitude", 0.0)
+                            val speed = obj.optDouble("speed_kmh", 0.0).toFloat()
+                            val heading = obj.optDouble("heading", 0.0).toFloat()
+                            val st = obj.safeString("status", "Active")
+                            val ts = obj.optLong("timestamp", System.currentTimeMillis())
+
+                            if (lat != 0.0 && lng != 0.0) {
+                                val locObj = LiveBusLocation(bId, bNum, dName, rName, lat, lng, speed, heading, st, ts)
+                                liveGpsMap[bId.trim().lowercase()] = locObj
+                                liveGpsMap[bNum.trim().lowercase()] = locObj
+                            }
+                        }
+                    } catch (_: Exception) {}
+                }
+
+                val currentList = liveGpsMap.values.distinctBy { it.busId }.toList()
+                withContext(Dispatchers.Main) {
+                    onUpdate(currentList)
+                }
+                delay(2000)
+            }
         }
     }
 }

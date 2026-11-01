@@ -678,27 +678,35 @@ fun ScheduleManagementScreen(user: user? = null, onBack: () -> Unit = {}) {
         val autoScheduleId = remember { targetSchedule?.scheduleId ?: ("SCH-" + (104..999).random()) }
 
         val busOptions = if (registeredBuses.isNotEmpty()) {
-            registeredBuses.map { b -> "${if (b.busNumber.isNotBlank()) b.busNumber else "BUS-" + b.busId} (${if (b.plateNumber.isNotBlank()) b.plateNumber else b.busId})" }
+            registeredBuses.map { b -> if (b.busNumber.isNotBlank()) b.busNumber else "BUS-" + b.busId }
         } else {
-            listOf("BUS-101")
+            emptyList()
         }
 
         val routeOptions = if (registeredRoutes.isNotEmpty()) {
             registeredRoutes.map { r -> r.routeName }
         } else {
-            listOf("Route A01: City Terminal ➔ Airport Hub")
+            emptyList()
         }
 
+        val rejectedDriverNamesOnDate = scheduleList
+            .filter { (it.dateDay == selectedFullDate || it.dateDay.isBlank()) && it.status == "Rejected" }
+            .map { it.driverName.trim().lowercase() }
+            .toSet()
+
         val driverOptions = if (registeredDrivers.isNotEmpty()) {
-            registeredDrivers.map { d -> d.driverName }
+            val available = registeredDrivers
+                .filter { d -> !rejectedDriverNamesOnDate.contains(d.driverName.trim().lowercase()) }
+                .map { d -> d.driverName }
+            if (available.isNotEmpty()) available else listOf("Unassigned")
         } else {
             listOf("Unassigned")
         }
 
-        var selectedBus by remember { mutableStateOf(targetSchedule?.busNumber ?: busOptions.first()) }
+        var selectedBus by remember { mutableStateOf(targetSchedule?.busNumber ?: busOptions.firstOrNull() ?: "") }
         var busDropdownExpanded by remember { mutableStateOf(false) }
 
-        var selectedRoute by remember { mutableStateOf(targetSchedule?.routeName ?: routeOptions.first()) }
+        var selectedRoute by remember { mutableStateOf(targetSchedule?.routeName ?: routeOptions.firstOrNull() ?: "") }
         var routeDropdownExpanded by remember { mutableStateOf(false) }
 
         var selectedDriver by remember { mutableStateOf(targetSchedule?.driverName ?: "Unassigned") }

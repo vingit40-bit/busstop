@@ -9,6 +9,7 @@ class BusSchedule(
 ) {
     var status: String = "Scheduled"
     var rejectionReason: String = ""
+    var scheduleDate: String = ""
 
     fun updateTime(
         newDeparture: String,

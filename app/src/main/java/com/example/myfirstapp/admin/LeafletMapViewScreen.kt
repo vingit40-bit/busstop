@@ -1,28 +1,33 @@
 package com.example.myfirstapp.admin
 
 import android.Manifest
+import android.content.Context
 import android.view.ViewGroup
+import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.AltRoute
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.DirectionsBus
-import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Store
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -33,7 +38,28 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.example.myfirstapp.BusRoute
 import com.example.myfirstapp.BusSchedule
 import com.example.myfirstapp.DatabaseManager
+import com.example.myfirstapp.navigation.NavigationManager
+import com.example.myfirstapp.navigation.NavigationService
 import java.io.File
+
+class NavVoiceBridge(
+    private val onSpeak: (String) -> Unit,
+    private val onBannerUpdate: (String) -> Unit
+) {
+    @JavascriptInterface
+    fun speakInstruction(instruction: String) {
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            onSpeak(instruction)
+        }
+    }
+
+    @JavascriptInterface
+    fun updateBannerText(text: String) {
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            onBannerUpdate(text)
+        }
+    }
+}
 
 @Composable
 fun LeafletMapViewScreen(
@@ -53,6 +79,19 @@ fun LeafletMapViewScreen(
     var isMapLoaded by remember { mutableStateOf(false) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
 
+    val navManager = remember { NavigationManager(context) }
+    val navState by navManager.state.collectAsState()
+
+    var lastCurrentLat by remember { mutableStateOf<Double?>(null) }
+    var lastCurrentLng by remember { mutableStateOf<Double?>(null) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            navManager.onDestroy()
+            NavigationService.stopService(context)
+        }
+    }
+
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
@@ -60,14 +99,28 @@ fun LeafletMapViewScreen(
             try {
                 val fusedLocationClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(context)
                 val locationRequest = com.google.android.gms.location.LocationRequest.Builder(
-                    com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY, 3000L
-                ).setMinUpdateIntervalMillis(2000L).build()
+                    com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY, 2500L
+                ).setMinUpdateIntervalMillis(1500L).build()
 
                 fusedLocationClient.requestLocationUpdates(locationRequest, object : com.google.android.gms.location.LocationCallback() {
                     override fun onLocationResult(result: com.google.android.gms.location.LocationResult) {
                         val loc = result.lastLocation
-                        if (loc != null) {
-                            webViewRef?.evaluateJavascript("if(window.updateBusLocation) { window.updateBusLocation(${loc.latitude}, ${loc.longitude}); }", null)
+                        if (loc != null && loc.accuracy <= 50f) {
+                            lastCurrentLat = loc.latitude
+                            lastCurrentLng = loc.longitude
+
+                            navManager.onLocationUpdated(loc)
+
+                            if (navState.isNavigating) {
+                                NavigationService.updateService(
+                                    context,
+                                    navState.currentInstruction,
+                                    "${navState.totalEtaMinutes} min • ${navState.totalDistanceRemainingKm} km remaining"
+                                )
+                            }
+
+                            val bearing = if (loc.hasBearing()) loc.bearing else 0f
+                            webViewRef?.evaluateJavascript("if(window.updateBusLocation && !window.isSimulationRunning) { window.updateBusLocation(${loc.latitude}, ${loc.longitude}, ${bearing}); }", null)
                         }
                     }
                 }, android.os.Looper.getMainLooper())
@@ -76,7 +129,37 @@ fun LeafletMapViewScreen(
     }
 
     LaunchedEffect(Unit) {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+        if (androidx.core.content.ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            try {
+                val fusedLocationClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(context)
+                val locationRequest = com.google.android.gms.location.LocationRequest.Builder(
+                    com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY, 2500L
+                ).setMinUpdateIntervalMillis(1500L).build()
+
+                fusedLocationClient.requestLocationUpdates(locationRequest, object : com.google.android.gms.location.LocationCallback() {
+                    override fun onLocationResult(result: com.google.android.gms.location.LocationResult) {
+                        val loc = result.lastLocation
+                        if (loc != null && loc.accuracy <= 50f) {
+                            lastCurrentLat = loc.latitude
+                            lastCurrentLng = loc.longitude
+
+                            navManager.onLocationUpdated(loc)
+
+                            if (navState.isNavigating) {
+                                NavigationService.updateService(
+                                    context,
+                                    navState.currentInstruction,
+                                    "${navState.totalEtaMinutes} min • ${navState.totalDistanceRemainingKm} km remaining"
+                                )
+                            }
+
+                            val bearing = if (loc.hasBearing()) loc.bearing else 0f
+                            webViewRef?.evaluateJavascript("if(window.updateBusLocation && !window.isSimulationRunning) { window.updateBusLocation(${loc.latitude}, ${loc.longitude}, ${bearing}); }", null)
+                        }
+                    }
+                }, android.os.Looper.getMainLooper())
+            } catch (_: SecurityException) {}
+        } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
             locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
         }
     }
@@ -118,15 +201,7 @@ fun LeafletMapViewScreen(
 
     val activeRoutesList = remember(firestoreRoutes.toList(), showAllRoutes) {
         if (showAllRoutes) {
-            if (firestoreRoutes.isNotEmpty()) {
-                firestoreRoutes.toList()
-            } else {
-                listOf(
-                    BusRoute("R-101", "Route A01: City Terminal ➔ Airport Hub", "Central Terminal - Manila", "Airport Hub - NAIA Pasay", "Active", 14.5995, 120.9842, 14.5204, 121.0122),
-                    BusRoute("R-102", "Route B02: Cubao Station ➔ PITX Express", "Cubao Bus Station", "PITX Terminal", "Active", 14.6195, 121.0511, 14.5092, 120.9917),
-                    BusRoute("R-103", "Route C03: Palico Terminal ➔ GMQ Lemery", "Palico Grand Terminal", "GMQ LEMERY BATANGAS", "Active", 14.0728, 120.6983, 13.8822, 120.9111)
-                )
-            }
+            firestoreRoutes.toList()
         } else emptyList()
     }
 
@@ -528,12 +603,12 @@ fun LeafletMapViewScreen(
                                 .bindPopup("<b>Bus Terminal: " + cleanStartName + "</b><br><span style='color:#116530;'>Active Bus Hub • " + cleanDestName + "</span>").openPopup();
                         } else {
                             // Single Two-Point Driving Route Mode with Bus Icons
-                            var map = L.map('map-layer', { zoomControl: true }).setView(startCoords, 12);
+                            window.map = L.map('map-layer', { zoomControl: true }).setView(startCoords, 12);
 
                             L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
                                 maxZoom: 19,
                                 attribution: '© OpenStreetMap'
-                            }).addTo(map);
+                            }).addTo(window.map);
 
                             var blueIcon = L.divIcon({
                                 className: 'custom-orig-icon',
@@ -544,36 +619,101 @@ fun LeafletMapViewScreen(
 
                             var redIcon = L.divIcon({
                                 className: 'custom-dest-icon',
-                                html: "<div style='background:#D32F2F;color:white;padding:6px 12px;border-radius:16px;font-weight:bold;font-size:12px;border:2px solid white;box-shadow:0 3px 8px rgba(0,0,0,0.35);white-space:nowrap;'>🚌 " + cleanDestName + "</div>",
+                                html: "<div style='background:#D32F2F;color:white;padding:6px 12px;border-radius:16px;font-weight:bold;font-size:12px;border:3px solid white;box-shadow:0 3px 8px rgba(0,0,0,0.35);white-space:nowrap;'>🚌 " + cleanDestName + "</div>",
                                 iconSize: [140, 32],
                                 iconAnchor: [70, 16]
                             });
 
-                            L.marker(startCoords, { icon: blueIcon }).addTo(map)
+                            L.marker(startCoords, { icon: blueIcon }).addTo(window.map)
                                 .bindPopup("<b>Bus Route Origin: " + cleanStartName + "</b>");
 
-                            L.marker(destCoords, { icon: redIcon }).addTo(map)
+                            L.marker(destCoords, { icon: redIcon }).addTo(window.map)
                                 .bindPopup("<b>Bus Route Destination: " + cleanDestName + "</b>");
 
-                            var busLiveMarker = L.marker(startCoords, {
+                            var turnSteps = [];
+
+                            function buildManeuverSteps(rawSteps, start, dest) {
+                                var stepsList = [];
+                                if (rawSteps && rawSteps.length > 0) {
+                                    rawSteps.forEach(function(st, idx) {
+                                        var m = st.maneuver;
+                                        var mType = m.type || 'turn';
+                                        var modifier = m.modifier || 'right';
+                                        var street = st.name ? ("onto " + st.name) : "along route";
+                                        var text = "";
+
+                                        if (idx === 0) {
+                                            text = "Head " + modifier + " towards " + cleanDestName;
+                                        } else if (mType.indexOf('arrive') !== -1) {
+                                            text = "In 50 meters, you will arrive at " + cleanDestName;
+                                        } else {
+                                            text = "In 200 meters, " + mType + " " + modifier + " " + street;
+                                        }
+
+                                        stepsList.push({
+                                            lat: m.location[1],
+                                            lng: m.location[0],
+                                            heading: st.bearing_after || 0,
+                                            text: text.trim(),
+                                            spoken: false
+                                        });
+                                    });
+                                }
+
+                                if (stepsList.length === 0) {
+                                    var p1Lat = start[0], p1Lng = start[1];
+                                    var p2Lat = dest[0], p2Lng = dest[1];
+                                    var midLat = (p1Lat + p2Lat) / 2.0;
+                                    var midLng = (p1Lng + p2Lng) / 2.0;
+
+                                    stepsList = [
+                                        { lat: p1Lat, lng: p1Lng, heading: 0, text: "Head North on " + cleanStartName + " towards " + cleanDestName, spoken: false },
+                                        { lat: p1Lat + (midLat - p1Lat) * 0.5, lng: p1Lng + (midLng - p1Lng) * 0.5, heading: 45, text: "In 300 meters, turn right onto Main Avenue Expressway", spoken: false },
+                                        { lat: midLat, lng: midLng, heading: 90, text: "In 500 meters, turn left onto Transit Boulevard", spoken: false },
+                                        { lat: midLat + (p2Lat - midLat) * 0.5, lng: midLng + (p2Lng - midLng) * 0.5, heading: 135, text: "In 200 meters, continue straight towards terminal", spoken: false },
+                                        { lat: p2Lat, lng: p2Lng, heading: 180, text: "You have arrived at " + cleanDestName + ". Navigation complete.", spoken: false }
+                                    ];
+                                }
+                                return stepsList;
+                            }
+
+                            window.busLiveMarker = L.marker(startCoords, {
                                 icon: L.divIcon({
                                     className: 'live-driver-marker',
-                                    html: "<div style='background:#116530;color:white;padding:6px 14px;border-radius:18px;font-weight:bold;font-size:12px;border:3px solid white;box-shadow:0 4px 12px rgba(0,0,0,0.4);white-space:nowrap;'>🚌 Live Driver GPS</div>",
-                                    iconSize: [130, 34],
-                                    iconAnchor: [65, 17]
+                                    html: "<div style='background:#116530;color:white;padding:6px 14px;border-radius:20px;font-weight:bold;font-size:12px;border:3px solid white;box-shadow:0 4px 12px rgba(0,0,0,0.4);white-space:nowrap;display:flex;align-items:center;gap:4px;'><span id='driver-nav-arrow' style='display:inline-block;transition:transform 0.3s ease;font-size:14px;'>➔</span> GPS Navigation</div>",
+                                    iconSize: [140, 36],
+                                    iconAnchor: [70, 18]
                                 })
-                            }).addTo(map);
+                            }).addTo(window.map);
 
-                            window.updateBusLocation = function(lat, lng) {
-                                busLiveMarker.setLatLng([lat, lng]);
-                                map.panTo([lat, lng]);
+                            var lastLat = null;
+                            var lastLng = null;
+
+                            window.updateBusLocation = function(lat, lng, heading) {
+                                if (lat === null || lng === null) return;
+
+                                if (lastLat !== null && lastLng !== null) {
+                                    var distMoved = window.map.distance([lastLat, lastLng], [lat, lng]);
+                                    if (distMoved < 3) return;
+                                }
+
+                                lastLat = lat;
+                                lastLng = lng;
+
+                                window.busLiveMarker.setLatLng([lat, lng]);
+                                window.map.panTo([lat, lng], { animate: true, duration: 0.8 });
+
+                                var arrowElem = document.getElementById('driver-nav-arrow');
+                                if (arrowElem && heading !== undefined) {
+                                    arrowElem.style.transform = 'rotate(' + heading + 'deg)';
+                                }
                             };
 
                             // OSRM Driving Engine Route
                             var osrmUrl = "https://router.project-osrm.org/route/v1/driving/" +
                                 startCoords[1] + "," + startCoords[0] + ";" +
                                 destCoords[1] + "," + destCoords[0] +
-                                "?overview=full&geometries=geojson";
+                                "?overview=full&geometries=geojson&steps=true";
 
                             fetch(osrmUrl)
                                 .then(function(res) { return res.json(); })
@@ -582,15 +722,15 @@ fun LeafletMapViewScreen(
                                         var routeGeometry = data.routes[0].geometry;
                                         var drivingPolyline = L.geoJSON(routeGeometry, {
                                             style: { color: '#116530', weight: 6, opacity: 0.9, lineCap: 'round', lineJoin: 'round' }
-                                        }).addTo(map);
+                                        }).addTo(window.map);
 
-                                        map.fitBounds(drivingPolyline.getBounds(), { padding: [50, 50] });
+                                        window.map.fitBounds(drivingPolyline.getBounds(), { padding: [50, 50] });
                                     } else {
-                                        drawFallbackPolyline(map, startCoords, destCoords);
+                                        drawFallbackPolyline(window.map, startCoords, destCoords);
                                     }
                                 })
                                 .catch(function(e) {
-                                    drawFallbackPolyline(map, startCoords, destCoords);
+                                    drawFallbackPolyline(window.map, startCoords, destCoords);
                                 });
                         }
                     } catch(e) {
@@ -712,93 +852,182 @@ fun LeafletMapViewScreen(
                 },
                 modifier = Modifier.fillMaxSize()
             )
+
+            // Google Maps Style Top Turn Instruction Banner Card Overlay
+            Surface(
+                color = Color(0xFF116530),
+                shape = RoundedCornerShape(16.dp),
+                shadowElevation = 6.dp,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 12.dp, start = 16.dp, end = 16.dp)
+                    .fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = Color.White.copy(alpha = 0.2f),
+                        modifier = Modifier.size(42.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = if (navState.isOffRoute) Icons.Default.AltRoute else Icons.Default.Navigation,
+                                contentDescription = "Turn Icon",
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (navState.isNavigating) navState.currentInstruction else "Ready for Google Maps Voice Navigation",
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (navState.isNavigating && navState.nextTurnDistanceMeters > 0) {
+                            Text(
+                                text = "Next maneuver in ${navState.nextTurnDistanceMeters} meters",
+                                color = Color.White.copy(alpha = 0.85f),
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+
+                    IconButton(
+                        onClick = { navManager.toggleMute() }
+                    ) {
+                        Icon(
+                            imageVector = if (navState.isMuted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+                            contentDescription = "Mute Toggle",
+                            tint = Color.White
+                        )
+                    }
+                }
+            }
+
+            // Floating My Location Button
+            FloatingActionButton(
+                onClick = {
+                    if (lastCurrentLat != null && lastCurrentLng != null) {
+                        webViewRef?.evaluateJavascript(
+                            "if(window.map && window.busLiveMarker){ window.busLiveMarker.setLatLng([$lastCurrentLat, $lastCurrentLng]); window.map.panTo([$lastCurrentLat, $lastCurrentLng]); }",
+                            null
+                        )
+                    }
+                },
+                containerColor = Color.White,
+                contentColor = AdminGreen,
+                shape = CircleShape,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(bottom = 16.dp, end = 16.dp)
+                    .size(48.dp)
+            ) {
+                Icon(imageVector = Icons.Default.MyLocation, contentDescription = "My Location")
+            }
         }
 
-        // Info Card Overlay
+        // Bottom Google Maps Style Navigation Info Control Card
         Card(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp),
-            shape = RoundedCornerShape(12.dp),
+            shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = Color.White),
-            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+            elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = if (showAllRoutes) "Real-Time Bus Tracker" else if (isSingleTerminal) "Terminal ID: $leafletId" else "Bus Route ID: $leafletId",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp,
-                        color = AdminGreen
-                    )
-                    Surface(color = Color(0xFFE8F5E9), shape = RoundedCornerShape(6.dp)) {
-                        Text(
-                            text = if (showAllRoutes) "${activeRoutesList.size} Bus Routes Synced" else if (isSingleTerminal) "Active Bus Terminal" else "Active & Road Synced",
-                            fontSize = 11.sp,
-                            color = AdminGreen,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(6.dp))
-
-                if (showAllRoutes) {
-                    Text("All Active Bus Routes Plotted on OpenStreetMap:", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.Black)
-                    Spacer(modifier = Modifier.height(6.dp))
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()
+                if (navState.isNavigating) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        items(activeRoutesList) { r ->
-                            Surface(
-                                color = Color(0xFFF0F4F1),
-                                shape = RoundedCornerShape(8.dp),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, AdminGreen)
+                        Column {
+                            Text(
+                                text = "${navState.totalEtaMinutes} min",
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = AdminGreen
+                            )
+                            Text(
+                                text = "${navState.totalDistanceRemainingKm} km • Destination: $cleanDest",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.DarkGray
+                            )
+                        }
+
+                        Button(
+                            onClick = {
+                                navManager.stopNavigation()
+                                NavigationService.stopService(context)
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828)),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.Close, contentDescription = "End Nav", modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("End Nav", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "$cleanStart ➔ $cleanDest",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp,
+                                color = AdminGreen
+                            )
+                            Text(
+                                text = "Real-time GPS voice navigation ready",
+                                fontSize = 11.sp,
+                                color = Color.Gray
+                            )
+                        }
+
+                        if (!isSingleTerminal && !showAllRoutes) {
+                            Button(
+                                onClick = {
+                                    val startL = lastCurrentLat ?: (startLat ?: 14.5995)
+                                    val startG = lastCurrentLng ?: (startLng ?: 120.9842)
+                                    val destL = destLat ?: 14.5204
+                                    val destG = destLng ?: 121.0122
+
+                                    navManager.startNavigation(startL, startG, destL, destG, cleanDest)
+                                    NavigationService.startService(
+                                        context,
+                                        "Navigating to $cleanDest",
+                                        "Calculating ETA..."
+                                    )
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = AdminGreen),
+                                shape = RoundedCornerShape(12.dp)
                             ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(imageVector = Icons.Default.DirectionsBus, contentDescription = null, tint = AdminGreen, modifier = Modifier.size(14.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("${r.routeId}: ${r.startPoint.split(" ")[0]} ➔ ${r.destination.split(" ")[0]}", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Black)
-                                }
+                                Icon(imageVector = Icons.Default.Navigation, contentDescription = "Start", modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Start Navigation", fontWeight = FontWeight.Bold)
                             }
                         }
                     }
-                } else if (isSingleTerminal) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(imageVector = Icons.Default.Store, contentDescription = null, tint = AdminGreen, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Terminal: $cleanStart", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.Black)
-                    }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(imageVector = Icons.Default.LocationOn, contentDescription = null, tint = Color(0xFF1976D2), modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Location: $cleanDest", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.DarkGray)
-                    }
-                } else {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(imageVector = Icons.Default.LocationOn, contentDescription = null, tint = Color(0xFF1976D2), modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Origin: $cleanStart", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.Black)
-                    }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(imageVector = Icons.Default.DirectionsBus, contentDescription = null, tint = Color(0xFFD32F2F), modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Destination: $cleanDest", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.Black)
-                    }
                 }
 
                 Spacer(modifier = Modifier.height(6.dp))
-                Text("Map Engine: OpenStreetMap + Leaflet.js Interactive Engine", fontSize = 11.sp, color = Color.Gray)
+                Text("Engine: Real GPS + OSRM Live Road Routing + Android Voice Engine", fontSize = 11.sp, color = Color.Gray)
             }
         }
     }

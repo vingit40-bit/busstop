@@ -66,9 +66,9 @@ fun DriverScheduleScreen(
 
     if (activeNavigationSchedule != null) {
         val sched = activeNavigationSchedule!!
-        LeafletMapViewScreen(
-            leafletId = sched.bus.busNumber,
-            routeName = sched.route.routeName,
+        DriverLiveNavigationScreen(
+            schedule = sched,
+            user = user,
             onBack = { activeNavigationSchedule = null }
         )
         return
@@ -106,6 +106,7 @@ fun DriverScheduleScreen(
                         DatabaseManager.updateScheduleRejection(
                             scheduleId = scheduleToReject!!.scheduleId,
                             reason = selectedReason,
+                            driverName = user.fullname,
                             onSuccess = {
                                 Toast.makeText(context, "Schedule rejected and sent to Admin notification", Toast.LENGTH_SHORT).show()
                                 scheduleToReject = null
@@ -129,11 +130,21 @@ fun DriverScheduleScreen(
         )
     }
 
-    val filteredSchedules = remember(schedules, selectedTab) {
+    val driverNameClean = user.fullname.trim().lowercase()
+    val filteredSchedules = remember(schedules, selectedTab, driverNameClean) {
         when (selectedTab) {
-            "Pending" -> schedules.filter { it.status.equals("Scheduled", ignoreCase = true) || it.status.isBlank() }
-            "Accepted" -> schedules.filter { it.status.equals("Accepted", ignoreCase = true) || it.status.equals("In Transit", ignoreCase = true) }
-            "Rejected" -> schedules.filter { it.status.equals("Rejected", ignoreCase = true) }
+            "Pending" -> schedules.filter {
+                (it.status.equals("Scheduled", ignoreCase = true) || it.status.isBlank()) &&
+                (it.bus.assignedDriver.isBlank() || it.bus.assignedDriver == "Unassigned" || it.bus.assignedDriver.lowercase().contains(driverNameClean) || driverNameClean.contains(it.bus.assignedDriver.lowercase()))
+            }
+            "Accepted" -> schedules.filter {
+                (it.status.equals("Accepted", ignoreCase = true) || it.status.equals("In Transit", ignoreCase = true)) &&
+                (it.bus.assignedDriver.lowercase().contains(driverNameClean) || driverNameClean.contains(it.bus.assignedDriver.lowercase()))
+            }
+            "Rejected" -> schedules.filter {
+                it.status.equals("Rejected", ignoreCase = true) &&
+                (it.bus.assignedDriver.lowercase().contains(driverNameClean) || driverNameClean.contains(it.bus.assignedDriver.lowercase()) || it.rejectionReason.isNotBlank())
+            }
             else -> schedules
         }
     }

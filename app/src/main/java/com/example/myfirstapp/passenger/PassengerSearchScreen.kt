@@ -143,14 +143,7 @@ fun PassengerSearchScreen(
         routes.forEach { route ->
             list.add(RecentSearchItem(route.routeName, "${route.startPoint} ➔ ${route.destination}", route.status))
         }
-        if (list.isEmpty()) {
-            listOf(
-                RecentSearchItem("Central Terminal - Manila", "Central Manila, Metro Manila", "Open 24 Hours"),
-                RecentSearchItem("Cubao Bus Station - Quezon City", "EDSA Corner Aurora Blvd, Cubao", "Open • Active Transit")
-            )
-        } else {
-            list
-        }
+        list
     }
     
     // Track which field is opening the Leaflet map location picker: "Origin" or "Destination" or null

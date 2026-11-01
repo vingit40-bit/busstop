@@ -2,11 +2,9 @@ package com.example.myfirstapp
 
 import android.content.Context
 import android.widget.Toast
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -25,14 +23,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.credentials.CredentialManager
-import androidx.credentials.GetCredentialRequest
 import com.example.myfirstapp.ui.theme.MyFirstAppTheme
-import com.google.android.libraries.identity.googleid.GetGoogleIdOption
-import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
-
-
-import kotlinx.coroutines.launch
 
 @Composable
 fun LoginScreen(
@@ -40,7 +31,6 @@ fun LoginScreen(
     onNavigateToSignUp: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
     val prefs = remember { context.getSharedPreferences("TransitGoPrefs", Context.MODE_PRIVATE) }
 
     var email by remember { mutableStateOf("") }
@@ -88,7 +78,6 @@ fun LoginScreen(
         unfocusedBorderColor = Color.LightGray
     )
 
-
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -130,8 +119,6 @@ fun LoginScreen(
                         color = TransitGreen
                     )
                 }
-
-
 
                 Spacer(modifier = Modifier.height(20.dp))
 
@@ -277,123 +264,7 @@ fun LoginScreen(
                     }
                 }
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    HorizontalDivider(modifier = Modifier.weight(1f))
-                    Text(
-                        text = " OR ",
-                        fontSize = 12.sp,
-                        color = Color.Gray
-                    )
-                    HorizontalDivider(modifier = Modifier.weight(1f))
-                }
-
-                // Continue with Google Button (Commuters / Passengers)
-                OutlinedButton(
-                    onClick = {
-                        coroutineScope.launch {
-                            isLoading = true
-                            try {
-                                val credentialManager = CredentialManager.create(context)
-                                val webClientId = "724670809540-c747p8sju0tgtpo89l67gubo06k5t12b.apps.googleusercontent.com"
-
-                                    val googleIdOption = GetGoogleIdOption.Builder()
-                                        .setFilterByAuthorizedAccounts(false)
-                                        .setServerClientId(webClientId)
-                                        .build()
-
-                                    val request = GetCredentialRequest.Builder()
-                                        .addCredentialOption(googleIdOption)
-                                        .build()
-
-                                    val result = credentialManager.getCredential(context, request)
-                                    val googleIdTokenCredential = GoogleIdTokenCredential.createFrom(result.credential.data)
-                                    val emailId = googleIdTokenCredential.id.ifBlank { "passenger@gmail.com" }
-                                    val name = googleIdTokenCredential.displayName ?: "Google Passenger"
-                                    val uid = googleIdTokenCredential.id.ifBlank { "G001" }
-
-                                    DatabaseManager.getUser(
-                                        userId = uid,
-                                        onSuccess = { fetchedUser ->
-                                            isLoading = false
-                                            saveOrClearCredentials()
-                                            val authenticatedUser = user(
-                                                userId = uid,
-                                                fullname = fetchedUser?.fullname?.ifBlank { name } ?: name,
-                                                email = emailId,
-                                                password = "",
-                                                role = fetchedUser?.role ?: "Passenger"
-                                            )
-                                            DatabaseManager.saveUser(authenticatedUser)
-                                            onLoginSuccess(authenticatedUser)
-                                        },
-                                        onFailure = {
-                                            isLoading = false
-                                            saveOrClearCredentials()
-                                            val authenticatedUser = user(
-                                                userId = uid,
-                                                fullname = name,
-                                                email = emailId,
-                                                password = "",
-                                                role = "Passenger"
-                                            )
-                                            DatabaseManager.saveUser(authenticatedUser)
-                                            onLoginSuccess(authenticatedUser)
-                                        }
-                                    )
-                                } catch (_: Exception) {
-                                    isLoading = false
-                                    val googleUser = user(
-                                        userId = "G001",
-                                        fullname = "Google Passenger",
-                                        email = "passenger@gmail.com",
-                                        password = "",
-                                        role = "Passenger"
-                                    )
-                                    saveOrClearCredentials()
-                                    onLoginSuccess(googleUser)
-                                }
-                            }
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(50.dp),
-                        shape = RoundedCornerShape(10.dp),
-                        border = BorderStroke(1.dp, Color.LightGray)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center
-                        ) {
-                            Surface(
-                                shape = CircleShape,
-                                color = MaterialTheme.colorScheme.primaryContainer,
-                                modifier = Modifier.size(24.dp)
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Text(
-                                        text = "G",
-                                        fontWeight = FontWeight.ExtraBold,
-                                        fontSize = 14.sp,
-                                        color = TransitGreen
-                                    )
-                                }
-                            }
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(
-                                text = "Continue with Google",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = Color.Black
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Don't have an account? ", fontSize = 13.sp, color = Color.Gray)

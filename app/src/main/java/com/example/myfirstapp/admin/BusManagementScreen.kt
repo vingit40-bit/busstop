@@ -46,6 +46,7 @@ import coil.request.ImageRequest
 import com.example.myfirstapp.BookingRecord
 import com.example.myfirstapp.Bus
 import com.example.myfirstapp.BusRoute
+import com.example.myfirstapp.isBookingForBus
 import com.example.myfirstapp.DatabaseManager
 import com.example.myfirstapp.DriverRecord
 import com.example.myfirstapp.R
@@ -318,14 +319,28 @@ fun BusManagementScreen(onBack: () -> Unit) {
                                             Text("Plate Number: ${bus.plateNumber}", fontSize = 13.sp, color = Color.DarkGray)
                                         }
                                         val busBookedSeats = allBookings
-                                            .filter { it.busId.equals(bus.busNumber, ignoreCase = true) || it.busId.equals(bus.busId, ignoreCase = true) }
+                                            .filter { isBookingForBus(it.busId, bus.busNumber, bus.busId, bus.plateNumber) }
                                             .flatMap { it.seats.split(",") }
                                             .mapNotNull { it.trim().toIntOrNull() }
                                             .toSet()
                                         val occupiedCount = busBookedSeats.size
                                         val remainingSeats = (bus.capacity - occupiedCount).coerceAtLeast(0)
 
-                                        Text("Bus Type: ${bus.busType}  •  ${bus.capacity} seats (${remainingSeats} avail, ${occupiedCount} occupied)", fontSize = 12.sp, color = AdminGreen, fontWeight = FontWeight.SemiBold)
+                                        Text("Bus Type: ${bus.busType} • ${bus.capacity} Total Seats", fontSize = 12.sp, color = Color.DarkGray)
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Surface(
+                                            color = Color(0xFFE8F5E9),
+                                            shape = RoundedCornerShape(6.dp),
+                                            border = BorderStroke(1.dp, AdminGreen)
+                                        ) {
+                                            Text(
+                                                text = "Seats: $remainingSeats Available / $occupiedCount Occupied",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = AdminGreen,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                            )
+                                        }
                                         Text("Driver: ${bus.assignedDriver}", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = AdminGreen)
                                         val matchedCardDriver = registeredDriverRecords.find { it.driverName.equals(bus.assignedDriver, ignoreCase = true) }
                                         if (matchedCardDriver != null && matchedCardDriver.contactNumber.isNotBlank()) {

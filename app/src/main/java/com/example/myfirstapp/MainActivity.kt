@@ -1,9 +1,11 @@
 package com.example.myfirstapp
 
+import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -89,12 +91,52 @@ enum class ScreenState {
 
 @Composable
 fun MainApp() {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("TransitGoPrefs", Context.MODE_PRIVATE) }
+
     var currentScreen by remember { mutableStateOf(ScreenState.LOGIN) }
     var loggedInUser by remember { mutableStateOf<user?>(null) }
 
-    // Auto-check if a user session is active (Auto-Login / Remember Me feature)
+    fun handleLoginSuccess(user: user) {
+        loggedInUser = user
+        prefs.edit()
+            .putString("active_uid", user.userId)
+            .putString("active_name", user.fullname)
+            .putString("active_email", user.email)
+            .putString("active_role", user.role)
+            .apply()
+        DatabaseManager.saveUser(user)
+        currentScreen = ScreenState.HOME
+    }
+
+    fun handleLogout() {
+        prefs.edit()
+            .remove("active_uid")
+            .remove("active_name")
+            .remove("active_email")
+            .remove("active_role")
+            .apply()
+        loggedInUser = null
+        currentScreen = ScreenState.LOGIN
+    }
+
+    // Auto-check if a user session is active (Auto-Login / Session persistence)
     LaunchedEffect(Unit) {
-        // Session handled via Login / Remember Me
+        val savedUid = prefs.getString("active_uid", "") ?: ""
+        val savedName = prefs.getString("active_name", "") ?: ""
+        val savedEmail = prefs.getString("active_email", "") ?: ""
+        val savedRole = prefs.getString("active_role", "") ?: ""
+
+        if (savedUid.isNotBlank() && savedEmail.isNotBlank()) {
+            loggedInUser = user(
+                userId = savedUid,
+                fullname = savedName.ifBlank { "Commuter User" },
+                email = savedEmail,
+                password = "",
+                role = savedRole.ifBlank { "Passenger" }
+            )
+            currentScreen = ScreenState.HOME
+        }
     }
 
     Surface(
@@ -105,9 +147,7 @@ fun MainApp() {
             ScreenState.LOGIN -> {
                 LoginScreen(
                     onLoginSuccess = { user ->
-                        loggedInUser = user
-                        DatabaseManager.saveUser(user)
-                        currentScreen = ScreenState.HOME
+                        handleLoginSuccess(user)
                     },
                     onNavigateToSignUp = {
                         currentScreen = ScreenState.SIGN_UP
@@ -117,9 +157,7 @@ fun MainApp() {
             ScreenState.SIGN_UP -> {
                 SignUpScreen(
                     onSignUpSuccess = { user ->
-                        loggedInUser = user
-                        DatabaseManager.saveUser(user)
-                        currentScreen = ScreenState.HOME
+                        handleLoginSuccess(user)
                     },
                     onNavigateToLogin = {
                         currentScreen = ScreenState.LOGIN
@@ -133,37 +171,25 @@ fun MainApp() {
                         "admin", "staff" -> {
                             AdminDashboardScreen(
                                 user = user,
-                                onLogout = {
-                                    loggedInUser = null
-                                    currentScreen = ScreenState.LOGIN
-                                }
+                                onLogout = ::handleLogout
                             )
                         }
                         "driver" -> {
                             com.example.myfirstapp.driver.DriverScheduleScreen(
                                 user = user,
-                                onLogout = {
-                                    loggedInUser = null
-                                    currentScreen = ScreenState.LOGIN
-                                }
+                                onLogout = ::handleLogout
                             )
                         }
                         "conductor" -> {
                             com.example.myfirstapp.conductor.ConductorDashboardScreen(
                                 user = user,
-                                onLogout = {
-                                    loggedInUser = null
-                                    currentScreen = ScreenState.LOGIN
-                                }
+                                onLogout = ::handleLogout
                             )
                         }
                         else -> {
                             HomeScreen(
                                 user = user,
-                                onLogout = {
-                                    loggedInUser = null
-                                    currentScreen = ScreenState.LOGIN
-                                }
+                                onLogout = ::handleLogout
                             )
                         }
                     }

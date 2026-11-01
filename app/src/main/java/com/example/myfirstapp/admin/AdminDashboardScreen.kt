@@ -1,5 +1,9 @@
 package com.example.myfirstapp.admin
 
+import android.net.Uri
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -11,10 +15,10 @@ import androidx.compose.material.icons.automirrored.filled.AltRoute
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.DirectionsBus
-
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Store
@@ -24,10 +28,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.myfirstapp.DatabaseManager
+import com.example.myfirstapp.PaymentSettings
 import com.example.myfirstapp.user
 
 val AdminGreen = Color(0xFF116530)
@@ -47,7 +54,12 @@ fun AdminDashboardScreen(
     }
 
     if (selectedTab == "Map") {
-        LeafletMapViewScreen(showAllRoutes = true, onBack = { selectedTab = "Dashboard" })
+        AdminLiveBusTrackingScreen(onBack = { selectedTab = "Dashboard" })
+        return
+    }
+
+    if (selectedTab == "Settings") {
+        AdminPaymentSettingsScreen(onBack = { selectedTab = "Dashboard" })
         return
     }
 
@@ -58,7 +70,7 @@ fun AdminDashboardScreen(
             "Conductor" -> ConductorManagementScreen(onBack = { activeSubScreen = null })
             "Schedule" -> ScheduleManagementScreen(user = user, onBack = { activeSubScreen = null })
             "Route" -> RouteManagementScreen(onBack = { activeSubScreen = null })
-            "Tracker" -> LeafletMapViewScreen(showAllRoutes = true, onBack = { activeSubScreen = null })
+            "Tracker" -> AdminLiveBusTrackingScreen(onBack = { activeSubScreen = null })
             "Terminal" -> TerminalManagementScreen(onBack = { activeSubScreen = null })
             else -> {
                 Box(
@@ -112,21 +124,22 @@ fun AdminDashboardScreen(
                     )
                 }
             }
-        }
+        },
+        containerColor = AdminBg
     ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .background(AdminBg)
+                .padding(16.dp)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 14.dp, vertical = 12.dp)
         ) {
-            // Admin Top Header Card
+            // Top Header
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = AdminGreen)
+                colors = CardDefaults.cardColors(containerColor = AdminGreen),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
             ) {
                 Row(
                     modifier = Modifier
@@ -135,14 +148,15 @@ fun AdminDashboardScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Welcome back,",
-                            fontSize = 13.sp,
-                            color = Color.White.copy(alpha = 0.85f)
+                            text = "Admin Portal",
+                            fontSize = 12.sp,
+                            color = Color.White.copy(alpha = 0.8f),
+                            fontWeight = FontWeight.Medium
                         )
                         Text(
-                            text = "${user.fullname} (Admin)",
+                            text = user.fullname,
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color.White,
@@ -161,7 +175,7 @@ fun AdminDashboardScreen(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // Stat Cards Row - Fully responsive to small mobile screens
+            // Stat Cards Row
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -182,7 +196,7 @@ fun AdminDashboardScreen(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Quick Action Grid (2-column responsive layout)
+            // Quick Action Grid
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     QuickActionTile(
@@ -248,6 +262,181 @@ fun AdminDashboardScreen(
 }
 
 @Composable
+fun AdminPaymentSettingsScreen(onBack: () -> Unit = {}) {
+    val context = LocalContext.current
+    var gcashNumber by remember { mutableStateOf("0917-123-4567") }
+    var paymayaNumber by remember { mutableStateOf("0918-987-6543") }
+    var gcashQrUri by remember { mutableStateOf<Uri?>(null) }
+    var paymayaQrUri by remember { mutableStateOf<Uri?>(null) }
+
+    var gcashQrUrl by remember { mutableStateOf("") }
+    var paymayaQrUrl by remember { mutableStateOf("") }
+
+    var isSaving by remember { mutableStateOf(false) }
+
+    val gcashPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) gcashQrUri = uri
+    }
+
+    val paymayaPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) paymayaQrUri = uri
+    }
+
+    LaunchedEffect(Unit) {
+        DatabaseManager.listenToPaymentSettings(
+            onUpdate = { settings ->
+                gcashNumber = settings.gcashNumber
+                paymayaNumber = settings.paymayaNumber
+                gcashQrUrl = settings.gcashQrUrl
+                paymayaQrUrl = settings.paymayaQrUrl
+            },
+            onError = {}
+        )
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState())
+    ) {
+        Text("Online Payment & QR Settings", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+        Text("Configure GCash and PayMaya QR codes for commuter online payments", fontSize = 12.sp, color = Color.Gray)
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // GCash Settings Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("GCash Payment Configuration", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = AdminGreen)
+                Spacer(modifier = Modifier.height(10.dp))
+
+                OutlinedTextField(
+                    value = gcashNumber,
+                    onValueChange = { gcashNumber = it },
+                    label = { Text("GCash Mobile / Account Number") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                OutlinedButton(
+                    onClick = { gcashPickerLauncher.launch("image/*") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(Icons.Default.QrCode, contentDescription = null)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(if (gcashQrUri != null) "✓ New GCash QR Selected" else "Upload Official GCash QR Image")
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        // PayMaya Settings Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("PayMaya Payment Configuration", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = AdminGreen)
+                Spacer(modifier = Modifier.height(10.dp))
+
+                OutlinedTextField(
+                    value = paymayaNumber,
+                    onValueChange = { paymayaNumber = it },
+                    label = { Text("PayMaya Account / Mobile Number") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                OutlinedButton(
+                    onClick = { paymayaPickerLauncher.launch("image/*") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(Icons.Default.QrCode, contentDescription = null)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(if (paymayaQrUri != null) "✓ New PayMaya QR Selected" else "Upload Official PayMaya QR Image")
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Button(
+            onClick = {
+                isSaving = true
+                val saveAction = { gUrl: String, pUrl: String ->
+                    val settings = PaymentSettings(
+                        id = "default_settings",
+                        gcashNumber = gcashNumber.trim(),
+                        gcashQrUrl = gUrl,
+                        paymayaNumber = paymayaNumber.trim(),
+                        paymayaQrUrl = pUrl
+                    )
+                    DatabaseManager.savePaymentSettings(
+                        settings,
+                        onSuccess = {
+                            isSaving = false
+                            Toast.makeText(context, "Payment settings & QR codes saved to Supabase!", Toast.LENGTH_SHORT).show()
+                        },
+                        onFailure = { err ->
+                            isSaving = false
+                            Toast.makeText(context, "Error: ${err.localizedMessage}", Toast.LENGTH_SHORT).show()
+                        }
+                    )
+                }
+
+                if (gcashQrUri != null) {
+                    DatabaseManager.uploadBusImageToSupabaseStorage(
+                        context, gcashQrUri!!,
+                        onSuccess = { uploadedGUrl ->
+                            if (paymayaQrUri != null) {
+                                DatabaseManager.uploadBusImageToSupabaseStorage(
+                                    context, paymayaQrUri!!,
+                                    onSuccess = { uploadedPUrl -> saveAction(uploadedGUrl, uploadedPUrl) },
+                                    onFailure = { saveAction(uploadedGUrl, paymayaQrUrl) }
+                                )
+                            } else saveAction(uploadedGUrl, paymayaQrUrl)
+                        },
+                        onFailure = { saveAction(gcashQrUrl, paymayaQrUrl) }
+                    )
+                } else if (paymayaQrUri != null) {
+                    DatabaseManager.uploadBusImageToSupabaseStorage(
+                        context, paymayaQrUri!!,
+                        onSuccess = { uploadedPUrl -> saveAction(gcashQrUrl, uploadedPUrl) },
+                        onFailure = { saveAction(gcashQrUrl, paymayaQrUrl) }
+                    )
+                } else {
+                    saveAction(gcashQrUrl, paymayaQrUrl)
+                }
+            },
+            colors = ButtonDefaults.buttonColors(containerColor = AdminGreen),
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            shape = RoundedCornerShape(10.dp)
+        ) {
+            if (isSaving) {
+                CircularProgressIndicator(color = Color.White, modifier = Modifier.size(22.dp))
+            } else {
+                Text("Save Payment QR", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            }
+        }
+    }
+}
+
+@Composable
 fun AdminStatCard(title: String, value: String, modifier: Modifier = Modifier) {
     Card(
         modifier = modifier,
@@ -284,7 +473,7 @@ fun QuickActionTile(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(8.dp),
+                .padding(12.dp),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -294,13 +483,13 @@ fun QuickActionTile(
                 tint = AdminGreen,
                 modifier = Modifier.size(24.dp)
             )
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
                 text = title,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
                 color = Color.Black,
-                lineHeight = 13.sp
+                lineHeight = 14.sp
             )
         }
     }

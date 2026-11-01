@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.DirectionsBus
+import androidx.compose.material.icons.filled.Event
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -27,11 +28,14 @@ import com.example.myfirstapp.Bus
 import com.example.myfirstapp.BusSchedule
 import com.example.myfirstapp.DatabaseManager
 import com.example.myfirstapp.TransitGreen
+import com.example.myfirstapp.isBookingForBus
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
-data class DateItem(val dayName: String, val dateNum: String, var isSelected: Boolean = false)
+val BusSchedule.resolvedDate: String
+    get() = if (bus.operator.isNotBlank()) bus.operator else scheduleDate
 
 fun calculateTripDurationFormatted(dep: String, arr: String): String {
     return try {
@@ -56,7 +60,7 @@ fun calculateTripDurationFormatted(dep: String, arr: String): String {
 fun SelectBusScreen(
     origin: String,
     destination: String,
-    journeyDate: String = "2026-10-26",
+    journeyDate: String = "",
     onBack: () -> Unit = {},
     onBusSelected: (BusSchedule) -> Unit = {}
 ) {
@@ -66,16 +70,43 @@ fun SelectBusScreen(
     var allBookings by remember { mutableStateOf<List<BookingRecord>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
 
-    var selectedDateNum by remember { mutableStateOf("23") }
+    val todaySdf = remember { SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH) }
+    val todayFullDateStr = remember { todaySdf.format(Date()) }
 
-    val datesList = remember {
-        listOf(
-            DateItem("Mon", "21"),
-            DateItem("Tue", "22"),
-            DateItem("Wed", "23", true),
-            DateItem("Thu", "24"),
-            DateItem("Fri", "25")
-        )
+    var selectedFullDate by remember { mutableStateOf(journeyDate.ifBlank { todayFullDateStr }) }
+    var showDatePickerModal by remember { mutableStateOf(false) }
+
+    // Dynamic Real Calendar Ribbon Generator (Same dynamic calendar logic as ScheduleManagementScreen)
+    val dynamicCalendarDays = remember(selectedFullDate) {
+        val sdfDayName = SimpleDateFormat("EEE", Locale.ENGLISH)
+        val sdfDayNum = SimpleDateFormat("dd", Locale.ENGLISH)
+        val sdfFull = SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH)
+
+        val cal = Calendar.getInstance()
+        try {
+            cal.time = sdfFull.parse(selectedFullDate) ?: Date()
+        } catch (_: Exception) {}
+
+        cal.add(Calendar.DAY_OF_YEAR, -3)
+        val list = mutableListOf<Triple<String, String, String>>()
+        for (i in 0 until 7) {
+            val dName = sdfDayName.format(cal.time)
+            val dNum = sdfDayNum.format(cal.time)
+            val fDate = sdfFull.format(cal.time)
+            list.add(Triple(dName, dNum, fDate))
+            cal.add(Calendar.DAY_OF_YEAR, 1)
+        }
+        list
+    }
+
+    // Friendly date header e.g. "Tuesday, March 31, 2026"
+    val formattedDisplayDate = remember(selectedFullDate) {
+        try {
+            val parsed = SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).parse(selectedFullDate)
+            if (parsed != null) SimpleDateFormat("EEEE, MMMM dd, yyyy", Locale.ENGLISH).format(parsed) else selectedFullDate
+        } catch (_: Exception) {
+            selectedFullDate
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -100,15 +131,25 @@ fun SelectBusScreen(
         )
     }
 
-    val filteredSchedules = remember(schedules, origin, destination) {
-        if (destination.isBlank()) schedules
-        else {
-            val matching = schedules.filter {
+    // Filter Saved Schedules for Selected Route & Date (Exact matching logic as ScheduleManagementScreen)
+    val filteredSchedules = remember(schedules, origin, destination, selectedFullDate) {
+        val validSchedules = schedules.filter { sched ->
+            !sched.status.equals("Rejected", ignoreCase = true) &&
+            !sched.status.equals("Cancelled", ignoreCase = true)
+        }
+
+        val routeMatching = if (destination.isBlank()) validSchedules else {
+            val matching = validSchedules.filter {
                 it.route.destination.contains(destination, ignoreCase = true) ||
                 it.route.routeName.contains(destination, ignoreCase = true) ||
                 it.route.startPoint.contains(origin, ignoreCase = true)
             }
-            if (matching.isNotEmpty()) matching else schedules
+            if (matching.isNotEmpty()) matching else validSchedules
+        }
+
+        routeMatching.filter { sched ->
+            val sDate = sched.resolvedDate.trim()
+            sDate.isBlank() || sDate == selectedFullDate || (selectedFullDate == todayFullDateStr && sDate.isBlank())
         }
     }
 
@@ -156,29 +197,76 @@ fun SelectBusScreen(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // Date Selection Strip Bar
-            Text("Select Date", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
-            Spacer(modifier = Modifier.height(6.dp))
+            // Calendar Header Bar with "Pick Date" button (Matching ScheduleManagementScreen)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text("Selected Date:", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Color.Gray)
+                    Text(formattedDisplayDate, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TransitGreen)
+                }
 
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                items(datesList) { dateItem ->
-                    val isSel = dateItem.dateNum == selectedDateNum
+                Surface(
+                    color = Color(0xFFE8F5E9),
+                    shape = RoundedCornerShape(20.dp),
+                    border = BorderStroke(1.dp, TransitGreen),
+                    modifier = Modifier.clickable { showDatePickerModal = true }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(imageVector = Icons.Default.Event, contentDescription = "Pick Date", tint = TransitGreen, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Pick Date", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TransitGreen)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Dynamic Calendar Ribbon Selector
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                items(dynamicCalendarDays) { triple ->
+                    val dayName = triple.first
+                    val dayNum = triple.second
+                    val fullDateStr = triple.third
+                    val isSelected = selectedFullDate == fullDateStr
+
                     Card(
                         modifier = Modifier
-                            .width(58.dp)
-                            .height(64.dp)
-                            .clickable { selectedDateNum = dateItem.dateNum },
-                        shape = RoundedCornerShape(10.dp),
-                        colors = CardDefaults.cardColors(containerColor = if (isSel) TransitGreen else Color.White),
-                        border = BorderStroke(1.dp, if (isSel) TransitGreen else Color.LightGray)
+                            .width(54.dp)
+                            .height(68.dp)
+                            .clickable { selectedFullDate = fullDateStr },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isSelected) TransitGreen else Color.White
+                        ),
+                        elevation = CardDefaults.cardElevation(defaultElevation = if (isSelected) 4.dp else 1.dp)
                     ) {
                         Column(
                             modifier = Modifier.fillMaxSize(),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
+                            verticalArrangement = Arrangement.Center,
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Text(dateItem.dayName, fontSize = 11.sp, color = if (isSel) Color.White else Color.Gray)
-                            Text(dateItem.dateNum, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = if (isSel) Color.White else Color.Black)
+                            Text(
+                                text = dayName.uppercase(),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isSelected) Color.White.copy(alpha = 0.85f) else Color.Gray
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = dayNum,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = if (isSelected) Color.White else Color.Black
+                            )
                         }
                     }
                 }
@@ -186,7 +274,12 @@ fun SelectBusScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            Text("Available Schedules for Selected Route", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
+            Text(
+                text = "Available Schedules for Selected Route",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.DarkGray
+            )
             Spacer(modifier = Modifier.height(8.dp))
 
             if (isLoading) {
@@ -195,7 +288,12 @@ fun SelectBusScreen(
                 }
             } else if (filteredSchedules.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("No buses available for this route.", color = Color.Gray)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(imageVector = Icons.Default.DirectionsBus, contentDescription = "Empty", tint = Color.Gray, modifier = Modifier.size(48.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("No Buses Available for $selectedFullDate", fontWeight = FontWeight.Bold, color = Color.Black)
+                        Text("Please select another date on the calendar above.", fontSize = 12.sp, color = Color.Gray)
+                    }
                 }
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxSize()) {
@@ -205,7 +303,7 @@ fun SelectBusScreen(
 
                         val totalCapacity = if (schedule.bus.capacity > 0) schedule.bus.capacity else 50
                         val busBookedSeats = allBookings
-                            .filter { it.busId == schedule.bus.busNumber || it.busId == schedule.bus.busId || it.busId.isBlank() }
+                            .filter { isBookingForBus(it.busId, schedule.bus.busNumber, schedule.bus.busId, schedule.bus.plateNumber) }
                             .flatMap { it.seats.split(",") }
                             .mapNotNull { it.trim().toIntOrNull() }
                             .toSet()
@@ -238,11 +336,21 @@ fun SelectBusScreen(
                                         )
                                         Spacer(modifier = Modifier.width(10.dp))
                                         Column {
-                                            Text("${schedule.departureTime} - ${schedule.arrivalTime}", fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = Color.Black)
+                                            Text(
+                                                text = "${schedule.departureTime} - ${schedule.arrivalTime}",
+                                                fontWeight = FontWeight.ExtraBold,
+                                                fontSize = 16.sp,
+                                                color = Color.Black
+                                            )
                                             Text(tripDurationText, fontSize = 12.sp, color = Color.Gray)
                                         }
                                     }
-                                    Text("₱%.0f".format(fareDisplay), fontWeight = FontWeight.ExtraBold, fontSize = 18.sp, color = TransitGreen)
+                                    Text(
+                                        text = "₱%.0f".format(fareDisplay),
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 18.sp,
+                                        color = TransitGreen
+                                    )
                                 }
 
                                 Spacer(modifier = Modifier.height(8.dp))
@@ -255,8 +363,18 @@ fun SelectBusScreen(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Column {
-                                        Text("Bus: ${schedule.bus.busNumber} • ${schedule.bus.busType}", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.DarkGray)
-                                        Text("Remaining Seats: $remainingSeats / $totalCapacity", fontSize = 12.sp, color = if (!isFullyBooked) TransitGreen else Color(0xFFC62828), fontWeight = FontWeight.Bold)
+                                        Text(
+                                            text = "Bus: ${schedule.bus.busNumber} • ${schedule.bus.busType.ifBlank { "Air-conditioned" }}",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color.DarkGray
+                                        )
+                                        Text(
+                                            text = "Remaining Seats: $remainingSeats / $totalCapacity",
+                                            fontSize = 12.sp,
+                                            color = if (!isFullyBooked) TransitGreen else Color(0xFFC62828),
+                                            fontWeight = FontWeight.Bold
+                                        )
                                     }
 
                                     Button(
@@ -283,6 +401,45 @@ fun SelectBusScreen(
                     }
                 }
             }
+        }
+    }
+
+    // Material 3 Date Picker Dialog Modal (Same as ScheduleManagementScreen)
+    if (showDatePickerModal) {
+        val initialMillis = remember(selectedFullDate) {
+            try {
+                SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).parse(selectedFullDate)?.time ?: System.currentTimeMillis()
+            } catch (_: Exception) {
+                System.currentTimeMillis()
+            }
+        }
+
+        val datePickerState = rememberDatePickerState(initialSelectedDateMillis = initialMillis)
+
+        DatePickerDialog(
+            onDismissRequest = { showDatePickerModal = false },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val selectedMillis = datePickerState.selectedDateMillis
+                        if (selectedMillis != null) {
+                            val pickedDate = SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).format(Date(selectedMillis))
+                            selectedFullDate = pickedDate
+                        }
+                        showDatePickerModal = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = TransitGreen)
+                ) {
+                    Text("Select Date")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDatePickerModal = false }) {
+                    Text("Cancel", color = Color.Gray)
+                }
+            }
+        ) {
+            DatePicker(state = datePickerState)
         }
     }
 }
