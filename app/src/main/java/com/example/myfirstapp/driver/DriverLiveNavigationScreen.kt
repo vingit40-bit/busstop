@@ -42,8 +42,36 @@ fun DriverLiveNavigationScreen(
     var currentSpeedKmh by remember { mutableStateOf(0f) }
     var currentHeading by remember { mutableStateOf(0f) }
 
-    val cleanStart = schedule.route.startPoint.ifBlank { "Central Terminal" }
-    val cleanDest = schedule.route.destination.ifBlank { "Airport Hub" }
+    val cleanStart = remember(schedule.route) {
+        if (schedule.route.startPoint.isNotBlank() && schedule.route.startPoint != "Origin" && schedule.route.startPoint != "Central Terminal") {
+            schedule.route.startPoint.replace(Regex("""^(Route:\s*|Route\s+[A-Za-z0-9-]+:\s*)+""", RegexOption.IGNORE_CASE), "").trim()
+        } else if (schedule.route.routeName.contains(" ➔ ")) {
+            val raw = schedule.route.routeName.split(" ➔ ")[0].trim()
+            raw.replace(Regex("""^(Route:\s*|Route\s+[A-Za-z0-9-]+:\s*)+""", RegexOption.IGNORE_CASE), "").trim()
+        } else if (schedule.route.routeName.contains(" - ")) {
+            val raw = schedule.route.routeName.split(" - ")[0].trim()
+            raw.replace(Regex("""^(Route:\s*|Route\s+[A-Za-z0-9-]+:\s*)+""", RegexOption.IGNORE_CASE), "").trim()
+        } else {
+            "Tuy"
+        }
+    }
+
+    val cleanDest = remember(schedule.route) {
+        if (schedule.route.destination.isNotBlank() && schedule.route.destination != "Destination" && schedule.route.destination != "Airport Hub") {
+            schedule.route.destination.replace(Regex("""^(Route:\s*|Route\s+[A-Za-z0-9-]+:\s*)+""", RegexOption.IGNORE_CASE), "").trim()
+        } else if (schedule.route.routeName.contains(" ➔ ")) {
+            schedule.route.routeName.split(" ➔ ")[1].trim()
+        } else if (schedule.route.routeName.contains(" - ")) {
+            schedule.route.routeName.split(" - ")[1].trim()
+        } else {
+            "Pasay"
+        }
+    }
+
+    val displayRouteName = remember(schedule.route.routeName) {
+        val cleaned = schedule.route.routeName.replace(Regex("""^(Route:\s*|Route\s+[A-Za-z0-9-]+:\s*)+""", RegexOption.IGNORE_CASE), "").trim()
+        if (cleaned.isNotBlank()) cleaned else schedule.route.routeName
+    }
 
     DisposableEffect(Unit) {
         onDispose {
@@ -52,103 +80,104 @@ fun DriverLiveNavigationScreen(
         }
     }
 
-    val locationPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            try {
-                val fusedLocationClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(context)
-                val locationRequest = com.google.android.gms.location.LocationRequest.Builder(
-                    com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY, 2000L
-                ).setMinUpdateIntervalMillis(1000L).build()
+    fun startLocationUpdates() {
+        try {
+            val fusedLocationClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(context)
+            
+            // Get last known location immediately
+            fusedLocationClient.lastLocation.addOnSuccessListener { loc ->
+                if (loc != null) {
+                    lastLat = loc.latitude
+                    lastLng = loc.longitude
+                    currentSpeedKmh = if (loc.hasSpeed()) loc.speed * 3.6f else 0f
+                    currentHeading = if (loc.hasBearing()) loc.bearing else 0f
 
-                fusedLocationClient.requestLocationUpdates(locationRequest, object : com.google.android.gms.location.LocationCallback() {
-                    override fun onLocationResult(result: com.google.android.gms.location.LocationResult) {
-                        val loc = result.lastLocation
-                        if (loc != null && loc.accuracy <= 50f) {
-                            lastLat = loc.latitude
-                            lastLng = loc.longitude
-                            currentSpeedKmh = if (loc.hasSpeed()) loc.speed * 3.6f else 0f
-                            currentHeading = if (loc.hasBearing()) loc.bearing else 0f
+                    navManager.onLocationUpdated(loc)
 
-                            // Update local voice navigation engine
-                            navManager.onLocationUpdated(loc)
+                    val liveLocation = LiveBusLocation(
+                        busId = schedule.bus.busId.ifBlank { schedule.bus.busNumber },
+                        busNumber = schedule.bus.busNumber,
+                        driverName = user.fullname.ifBlank { schedule.bus.assignedDriver },
+                        routeName = schedule.route.routeName,
+                        latitude = loc.latitude,
+                        longitude = loc.longitude,
+                        speedKmh = currentSpeedKmh,
+                        heading = currentHeading,
+                        status = if (currentSpeedKmh > 3f) "Moving" else "Stopped",
+                        timestamp = System.currentTimeMillis()
+                    )
+                    DatabaseManager.updateBusGpsLocation(liveLocation)
+                }
+            }
 
-                            // Broadcast live GPS position to Supabase / Real-Time Database for Admin and Commuter tracking
-                            val liveLocation = LiveBusLocation(
-                                busId = schedule.bus.busId.ifBlank { schedule.bus.busNumber },
-                                busNumber = schedule.bus.busNumber,
-                                driverName = user.fullname.ifBlank { schedule.bus.assignedDriver },
-                                routeName = schedule.route.routeName,
-                                latitude = loc.latitude,
-                                longitude = loc.longitude,
-                                speedKmh = currentSpeedKmh,
-                                heading = currentHeading,
-                                status = if (currentSpeedKmh > 3f) "Moving" else "Stopped",
-                                timestamp = System.currentTimeMillis()
+            // Continuous location updates
+            val locationRequest = com.google.android.gms.location.LocationRequest.Builder(
+                com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY, 2000L
+            ).setMinUpdateIntervalMillis(1000L).build()
+
+            fusedLocationClient.requestLocationUpdates(locationRequest, object : com.google.android.gms.location.LocationCallback() {
+                override fun onLocationResult(result: com.google.android.gms.location.LocationResult) {
+                    val loc = result.lastLocation
+                    if (loc != null) {
+                        lastLat = loc.latitude
+                        lastLng = loc.longitude
+                        currentSpeedKmh = if (loc.hasSpeed()) loc.speed * 3.6f else 0f
+                        currentHeading = if (loc.hasBearing()) loc.bearing else 0f
+
+                        navManager.onLocationUpdated(loc)
+
+                        val liveLocation = LiveBusLocation(
+                            busId = schedule.bus.busId.ifBlank { schedule.bus.busNumber },
+                            busNumber = schedule.bus.busNumber,
+                            driverName = user.fullname.ifBlank { schedule.bus.assignedDriver },
+                            routeName = schedule.route.routeName,
+                            latitude = loc.latitude,
+                            longitude = loc.longitude,
+                            speedKmh = currentSpeedKmh,
+                            heading = currentHeading,
+                            status = if (currentSpeedKmh > 3f) "Moving" else "Stopped",
+                            timestamp = System.currentTimeMillis()
+                        )
+                        DatabaseManager.updateBusGpsLocation(liveLocation)
+
+                        if (navState.isNavigating) {
+                            NavigationService.updateService(
+                                context,
+                                navState.currentInstruction,
+                                "${navState.totalEtaMinutes} min • ${navState.totalDistanceRemainingKm} km remaining"
                             )
-                            DatabaseManager.updateBusGpsLocation(liveLocation)
-
-                            if (navState.isNavigating) {
-                                NavigationService.updateService(
-                                    context,
-                                    navState.currentInstruction,
-                                    "${navState.totalEtaMinutes} min • ${navState.totalDistanceRemainingKm} km remaining"
-                                )
-                            }
                         }
                     }
-                }, android.os.Looper.getMainLooper())
-            } catch (_: SecurityException) {}
+                }
+            }, android.os.Looper.getMainLooper())
+        } catch (_: SecurityException) {}
+    }
+
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val fineGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] ?: false
+        val coarseGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] ?: false
+        if (fineGranted || coarseGranted) {
+            startLocationUpdates()
+        } else {
+            Toast.makeText(context, "Location permission required for GPS navigation", Toast.LENGTH_LONG).show()
         }
     }
 
     LaunchedEffect(Unit) {
-        if (androidx.core.content.ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            try {
-                val fusedLocationClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(context)
-                val locationRequest = com.google.android.gms.location.LocationRequest.Builder(
-                    com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY, 2000L
-                ).setMinUpdateIntervalMillis(1000L).build()
+        val hasFine = androidx.core.content.ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        val hasCoarse = androidx.core.content.ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
-                fusedLocationClient.requestLocationUpdates(locationRequest, object : com.google.android.gms.location.LocationCallback() {
-                    override fun onLocationResult(result: com.google.android.gms.location.LocationResult) {
-                        val loc = result.lastLocation
-                        if (loc != null && loc.accuracy <= 50f) {
-                            lastLat = loc.latitude
-                            lastLng = loc.longitude
-                            currentSpeedKmh = if (loc.hasSpeed()) loc.speed * 3.6f else 0f
-                            currentHeading = if (loc.hasBearing()) loc.bearing else 0f
-
-                            navManager.onLocationUpdated(loc)
-
-                            val liveLocation = LiveBusLocation(
-                                busId = schedule.bus.busId.ifBlank { schedule.bus.busNumber },
-                                busNumber = schedule.bus.busNumber,
-                                driverName = user.fullname.ifBlank { schedule.bus.assignedDriver },
-                                routeName = schedule.route.routeName,
-                                latitude = loc.latitude,
-                                longitude = loc.longitude,
-                                speedKmh = currentSpeedKmh,
-                                heading = currentHeading,
-                                status = if (currentSpeedKmh > 3f) "Moving" else "Stopped",
-                                timestamp = System.currentTimeMillis()
-                            )
-                            DatabaseManager.updateBusGpsLocation(liveLocation)
-
-                            if (navState.isNavigating) {
-                                NavigationService.updateService(
-                                    context,
-                                    navState.currentInstruction,
-                                    "${navState.totalEtaMinutes} min • ${navState.totalDistanceRemainingKm} km remaining"
-                                )
-                            }
-                        }
-                    }
-                }, android.os.Looper.getMainLooper())
-            } catch (_: SecurityException) {}
-        } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-            locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        if (hasFine || hasCoarse) {
+            startLocationUpdates()
+        } else {
+            locationPermissionLauncher.launch(
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                )
+            )
         }
     }
 
@@ -158,7 +187,7 @@ fun DriverLiveNavigationScreen(
                 title = {
                     Column {
                         Text("Driver Live Navigation", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.White)
-                        Text("Bus: ${schedule.bus.busNumber} • Route: ${schedule.route.routeName}", fontSize = 11.sp, color = Color.White.copy(alpha = 0.85f))
+                        Text("Bus: ${schedule.bus.busNumber} • Route: $displayRouteName", fontSize = 11.sp, color = Color.White.copy(alpha = 0.85f))
                     }
                 },
                 navigationIcon = {
@@ -178,13 +207,14 @@ fun DriverLiveNavigationScreen(
             // Live Interactive Map View Container
             LeafletMapViewScreen(
                 leafletId = schedule.bus.busNumber,
-                routeName = schedule.route.routeName,
+                routeName = displayRouteName,
                 startPoint = cleanStart,
                 destination = cleanDest,
-                startLat = lastLat ?: schedule.route.startLat,
-                startLng = lastLng ?: schedule.route.startLng,
-                destLat = schedule.route.destLat,
-                destLng = schedule.route.destLng,
+                startLat = if (schedule.route.startLat != 0.0) schedule.route.startLat else null,
+                startLng = if (schedule.route.startLng != 0.0) schedule.route.startLng else null,
+                destLat = if (schedule.route.destLat != 0.0) schedule.route.destLat else null,
+                destLng = if (schedule.route.destLng != 0.0) schedule.route.destLng else null,
+                isDriverNav = true,
                 onBack = onBack
             )
         }

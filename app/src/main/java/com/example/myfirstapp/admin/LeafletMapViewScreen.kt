@@ -71,8 +71,16 @@ fun LeafletMapViewScreen(
     startLng: Double? = null,
     destLat: Double? = null,
     destLng: Double? = null,
+    liveBusLat: Double? = null,
+    liveBusLng: Double? = null,
+    liveBusHeading: Float = 0f,
+    liveBusLabel: String = "",
     isSingleTerminal: Boolean = false,
     showAllRoutes: Boolean = false,
+    customRoutes: List<BusRoute> = emptyList(),
+    isDriverNav: Boolean = false,
+    showTopBar: Boolean = false,
+    showBottomCard: Boolean = false,
     onBack: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -98,6 +106,19 @@ fun LeafletMapViewScreen(
         if (isGranted) {
             try {
                 val fusedLocationClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(context)
+                
+                fusedLocationClient.lastLocation.addOnSuccessListener { loc ->
+                    if (loc != null) {
+                        lastCurrentLat = loc.latitude
+                        lastCurrentLng = loc.longitude
+
+                        navManager.onLocationUpdated(loc)
+
+                        val bearing = if (loc.hasBearing()) loc.bearing else 0f
+                        webViewRef?.evaluateJavascript("if(window.updateBusLocation && !window.isSimulationRunning) { window.updateBusLocation(${loc.latitude}, ${loc.longitude}, ${bearing}); }", null)
+                    }
+                }
+
                 val locationRequest = com.google.android.gms.location.LocationRequest.Builder(
                     com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY, 2500L
                 ).setMinUpdateIntervalMillis(1500L).build()
@@ -105,7 +126,7 @@ fun LeafletMapViewScreen(
                 fusedLocationClient.requestLocationUpdates(locationRequest, object : com.google.android.gms.location.LocationCallback() {
                     override fun onLocationResult(result: com.google.android.gms.location.LocationResult) {
                         val loc = result.lastLocation
-                        if (loc != null && loc.accuracy <= 50f) {
+                        if (loc != null) {
                             lastCurrentLat = loc.latitude
                             lastCurrentLng = loc.longitude
 
@@ -132,6 +153,19 @@ fun LeafletMapViewScreen(
         if (androidx.core.content.ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
             try {
                 val fusedLocationClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(context)
+
+                fusedLocationClient.lastLocation.addOnSuccessListener { loc ->
+                    if (loc != null) {
+                        lastCurrentLat = loc.latitude
+                        lastCurrentLng = loc.longitude
+
+                        navManager.onLocationUpdated(loc)
+
+                        val bearing = if (loc.hasBearing()) loc.bearing else 0f
+                        webViewRef?.evaluateJavascript("if(window.updateBusLocation && !window.isSimulationRunning) { window.updateBusLocation(${loc.latitude}, ${loc.longitude}, ${bearing}); }", null)
+                    }
+                }
+
                 val locationRequest = com.google.android.gms.location.LocationRequest.Builder(
                     com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY, 2500L
                 ).setMinUpdateIntervalMillis(1500L).build()
@@ -139,7 +173,7 @@ fun LeafletMapViewScreen(
                 fusedLocationClient.requestLocationUpdates(locationRequest, object : com.google.android.gms.location.LocationCallback() {
                     override fun onLocationResult(result: com.google.android.gms.location.LocationResult) {
                         val loc = result.lastLocation
-                        if (loc != null && loc.accuracy <= 50f) {
+                        if (loc != null) {
                             lastCurrentLat = loc.latitude
                             lastCurrentLng = loc.longitude
 
@@ -193,15 +227,15 @@ fun LeafletMapViewScreen(
             val cleanRoute = s.route.routeName.replace("'", "\\'")
             val cleanDriver = s.bus.assignedDriver.replace("'", "\\'")
             val cleanStatus = s.status.replace("'", "\\'")
-            sb.append("{\"busNumber\":\"$cleanBusNum\",\"route\":\"$cleanRoute\",\"driver\":\"$cleanDriver\",\"status\":\"$cleanStatus\"}")
+            sb.append("{\"busNumber\":\"$cleanBusNum\",\"route\":\"$cleanRoute\",\"driver\":\"$cleanDriver\",\"status\":\"$cleanStatus\",\"sLat\":${s.route.startLat},\"sLng\":${s.route.startLng}}")
         }
         sb.append("]")
         sb.toString()
     }
 
-    val activeRoutesList = remember(firestoreRoutes.toList(), showAllRoutes) {
+    val activeRoutesList = remember(customRoutes, firestoreRoutes.toList(), showAllRoutes) {
         if (showAllRoutes) {
-            firestoreRoutes.toList()
+            if (customRoutes.isNotEmpty()) customRoutes else firestoreRoutes.toList()
         } else emptyList()
     }
 
@@ -227,16 +261,16 @@ fun LeafletMapViewScreen(
 
     // Clean Start Point
     val cleanStart = remember(startPoint, routeName) {
-        if (startPoint.isNotBlank()) {
-            startPoint.trim()
+        if (startPoint.isNotBlank() && startPoint != "Origin" && startPoint != "Central Terminal") {
+            startPoint.replace(Regex("""^(Route:\s*|Route\s+[A-Za-z0-9-]+:\s*)+""", RegexOption.IGNORE_CASE), "").trim()
         } else if (routeName.contains(" ➔ ")) {
             val raw = routeName.split(" ➔ ")[0].trim()
-            raw.replace(Regex("""^Route\s+[A-Za-z0-9-]+:\s*""", RegexOption.IGNORE_CASE), "").trim()
+            raw.replace(Regex("""^(Route:\s*|Route\s+[A-Za-z0-9-]+:\s*)+""", RegexOption.IGNORE_CASE), "").trim()
         } else if (routeName.contains(" - ")) {
             val raw = routeName.split(" - ")[0].trim()
-            raw.replace(Regex("""^Route\s+[A-Za-z0-9-]+:\s*""", RegexOption.IGNORE_CASE), "").trim()
+            raw.replace(Regex("""^(Route:\s*|Route\s+[A-Za-z0-9-]+:\s*)+""", RegexOption.IGNORE_CASE), "").trim()
         } else if (routeName.isNotBlank()) {
-            routeName.trim()
+            routeName.replace(Regex("""^(Route:\s*|Route\s+[A-Za-z0-9-]+:\s*)+""", RegexOption.IGNORE_CASE), "").trim()
         } else {
             "Central Terminal"
         }
@@ -244,8 +278,8 @@ fun LeafletMapViewScreen(
 
     // Clean Destination Point
     val cleanDest = remember(destination, routeName) {
-        if (destination.isNotBlank()) {
-            destination.trim()
+        if (destination.isNotBlank() && destination != "Destination" && destination != "Airport Hub") {
+            destination.replace(Regex("""^(Route:\s*|Route\s+[A-Za-z0-9-]+:\s*)+""", RegexOption.IGNORE_CASE), "").trim()
         } else if (routeName.contains(" ➔ ")) {
             routeName.split(" ➔ ")[1].trim()
         } else if (routeName.contains(" - ")) {
@@ -258,10 +292,24 @@ fun LeafletMapViewScreen(
     val cleanStartJS = remember(cleanStart) { cleanStart.replace("'", "\\'") }
     val cleanDestJS = remember(cleanDest) { cleanDest.replace("'", "\\'") }
 
-    val startLatJS = if (startLat != null) startLat.toString() else "null"
-    val startLngJS = if (startLng != null) startLng.toString() else "null"
-    val destLatJS = if (destLat != null) destLat.toString() else "null"
-    val destLngJS = if (destLng != null) destLng.toString() else "null"
+    val startLatJS = if (startLat != null && startLat != 0.0) startLat.toString() else "null"
+    val startLngJS = if (startLng != null && startLng != 0.0) startLng.toString() else "null"
+    val destLatJS = if (destLat != null && destLat != 0.0) destLat.toString() else "null"
+    val destLngJS = if (destLng != null && destLng != 0.0) destLng.toString() else "null"
+
+    val liveBusLatJS = if (liveBusLat != null && liveBusLat != 0.0) liveBusLat.toString() else "null"
+    val liveBusLngJS = if (liveBusLng != null && liveBusLng != 0.0) liveBusLng.toString() else "null"
+    val liveBusLabelJS = remember(liveBusLabel) { liveBusLabel.replace("'", "\\'") }
+
+    LaunchedEffect(liveBusLat, liveBusLng, liveBusHeading, liveBusLabel, isMapLoaded) {
+        if (isMapLoaded && liveBusLat != null && liveBusLng != null && liveBusLat != 0.0 && liveBusLng != 0.0) {
+            val cleanLabel = liveBusLabel.replace("'", "\\'")
+            webViewRef?.evaluateJavascript(
+                "if(window.updateBusLocation) { window.updateBusLocation($liveBusLat, $liveBusLng, $liveBusHeading, '$cleanLabel'); }",
+                null
+            )
+        }
+    }
 
     val leafletHtmlContent = """
         <!DOCTYPE html>
@@ -310,6 +358,7 @@ fun LeafletMapViewScreen(
                 var cleanDestName = "$cleanDestJS";
                 var isSingleMode = $isSingleTerminal;
                 var showAllRoutesMode = $showAllRoutes;
+                var isDriverNavMode = $isDriverNav;
                 var routesData = $routesJsonData;
                 var schedulesData = $schedulesJsonData;
 
@@ -317,6 +366,11 @@ fun LeafletMapViewScreen(
                 var paramStartLng = $startLngJS;
                 var paramDestLat = $destLatJS;
                 var paramDestLng = $destLngJS;
+
+                var paramLiveBusLat = $liveBusLatJS;
+                var paramLiveBusLng = $liveBusLngJS;
+                var paramLiveBusHeading = $liveBusHeading;
+                var paramLiveBusLabel = "$liveBusLabelJS";
 
                 var knownLocations = {
                     "city terminal": [14.5995, 120.9842],
@@ -327,6 +381,7 @@ fun LeafletMapViewScreen(
                     "airport hub": [14.5204, 121.0122],
                     "naia": [14.5204, 121.0122],
                     "pasay": [14.5378, 120.9992],
+                    "pasay terminal": [14.5378, 120.9992],
                     "cubao station": [14.6195, 121.0511],
                     "cubao": [14.6195, 121.0511],
                     "quezon city": [14.6760, 121.0437],
@@ -346,6 +401,19 @@ fun LeafletMapViewScreen(
                     "tuy": [14.0200, 120.7300],
                     "hydromed tuy": [14.0200, 120.7300],
                     "batangas": [13.7565, 121.0583],
+                    "batangas city": [13.7565, 121.0583],
+                    "lipa": [13.9419, 121.1644],
+                    "lipa city": [13.9419, 121.1644],
+                    "tanauan": [14.0861, 121.1500],
+                    "sto. tomas": [14.1083, 121.1417],
+                    "santo tomas": [14.1083, 121.1417],
+                    "calamba": [14.2117, 121.1653],
+                    "biñan": [14.3333, 121.0833],
+                    "binan": [14.3333, 121.0833],
+                    "santa rosa": [14.3167, 121.1167],
+                    "sta. rosa": [14.3167, 121.1167],
+                    "san pedro": [14.3583, 121.0583],
+                    "tagaytay": [14.1153, 120.9621],
                     "city center": [14.5800, 121.0000],
                     "makati": [14.5547, 121.0244],
                     "taguig": [14.5176, 121.0509],
@@ -353,14 +421,16 @@ fun LeafletMapViewScreen(
                     "muntinlupa": [14.4081, 121.0415],
                     "cavite": [14.4791, 120.8970],
                     "bacoor": [14.4602, 120.9631],
-                    "dasmarinas": [14.3294, 120.9367]
+                    "dasmarinas": [14.3294, 120.9367],
+                    "dasmariñas": [14.3294, 120.9367],
+                    "imus": [14.4297, 120.9367]
                 };
 
                 function getCoordsForText(text, isDest) {
                     if (!text || text.trim().length === 0) {
                         return isDest ? [14.5204, 121.0122] : [14.5995, 120.9842];
                     }
-                    var lower = text.trim().toLowerCase();
+                    var lower = text.trim().toLowerCase().replace(/^(route:\s*|route\s+[a-z0-9-]+:\s*)+/gi, '').trim();
                     for (var key in knownLocations) {
                         if (lower.includes(key)) {
                             return knownLocations[key];
@@ -377,8 +447,8 @@ fun LeafletMapViewScreen(
                     return [baseLat + latOffset, baseLng + lngOffset];
                 }
 
-                var startCoords = (paramStartLat !== null && paramStartLng !== null) ? [paramStartLat, paramStartLng] : getCoordsForText(cleanStartName, false);
-                var destCoords = (paramDestLat !== null && paramDestLng !== null) ? [paramDestLat, paramDestLng] : getCoordsForText(cleanDestName, true);
+                var startCoords = (paramStartLat !== null && paramStartLng !== null && paramStartLat !== 0.0 && paramStartLng !== 0.0) ? [paramStartLat, paramStartLng] : getCoordsForText(cleanStartName, false);
+                var destCoords = (paramDestLat !== null && paramDestLng !== null && paramDestLat !== 0.0 && paramDestLng !== 0.0) ? [paramDestLat, paramDestLng] : getCoordsForText(cleanDestName, true);
 
                 // --- LAYER 1: Immediate Self-Contained Vector Canvas Map Engine ---
                 function drawVectorMap() {
@@ -516,7 +586,7 @@ fun LeafletMapViewScreen(
 
                             if (schedulesData && schedulesData.length > 0) {
                                 schedulesData.forEach(function(sched, idx) {
-                                    var bCoords = [14.5995 + (idx * 0.008), 120.9842 + (idx * 0.008)];
+                                    var bCoords = (sched.sLat && sched.sLng && sched.sLat !== 0.0) ? [sched.sLat, sched.sLng] : getCoordsForText(sched.route, false);
                                     var busIcon = L.divIcon({
                                         className: 'live-bus-fleet-' + idx,
                                         html: "<div style='background:#116530;color:white;padding:6px 12px;border-radius:16px;font-weight:bold;font-size:11px;border:2px solid white;box-shadow:0 3px 8px rgba(0,0,0,0.35);white-space:nowrap;'>🚌 Bus " + sched.busNumber + " (" + sched.status + ")</div>",
@@ -677,35 +747,45 @@ fun LeafletMapViewScreen(
                                 return stepsList;
                             }
 
-                            window.busLiveMarker = L.marker(startCoords, {
+                            var initialBusPos = (paramLiveBusLat !== null && paramLiveBusLng !== null && paramLiveBusLat !== 0.0 && paramLiveBusLng !== 0.0) ? [paramLiveBusLat, paramLiveBusLng] : startCoords;
+                            var initialMarkerLabel = paramLiveBusLabel || "GPS Navigation";
+
+                            window.busLiveMarker = L.marker(initialBusPos, {
                                 icon: L.divIcon({
                                     className: 'live-driver-marker',
-                                    html: "<div style='background:#116530;color:white;padding:6px 14px;border-radius:20px;font-weight:bold;font-size:12px;border:3px solid white;box-shadow:0 4px 12px rgba(0,0,0,0.4);white-space:nowrap;display:flex;align-items:center;gap:4px;'><span id='driver-nav-arrow' style='display:inline-block;transition:transform 0.3s ease;font-size:14px;'>➔</span> GPS Navigation</div>",
-                                    iconSize: [140, 36],
-                                    iconAnchor: [70, 18]
+                                    html: "<div style='background:#116530;color:white;padding:6px 14px;border-radius:20px;font-weight:bold;font-size:12px;border:3px solid white;box-shadow:0 4px 12px rgba(0,0,0,0.4);white-space:nowrap;display:flex;align-items:center;gap:4px;'><span id='driver-nav-arrow' style='display:inline-block;transition:transform 0.3s ease;font-size:14px;'>➔</span> <span id='live-marker-label'>" + initialMarkerLabel + "</span></div>",
+                                    iconSize: [160, 36],
+                                    iconAnchor: [80, 18]
                                 })
                             }).addTo(window.map);
 
                             var lastLat = null;
                             var lastLng = null;
 
-                            window.updateBusLocation = function(lat, lng, heading) {
-                                if (lat === null || lng === null) return;
+                            window.updateBusLocation = function(lat, lng, heading, labelText) {
+                                if (lat === null || lng === null || lat === 0.0 || lng === 0.0) return;
 
                                 if (lastLat !== null && lastLng !== null) {
                                     var distMoved = window.map.distance([lastLat, lastLng], [lat, lng]);
-                                    if (distMoved < 3) return;
+                                    if (distMoved < 1 && !labelText) return;
                                 }
 
                                 lastLat = lat;
                                 lastLng = lng;
 
-                                window.busLiveMarker.setLatLng([lat, lng]);
-                                window.map.panTo([lat, lng], { animate: true, duration: 0.8 });
+                                if (window.busLiveMarker) {
+                                    window.busLiveMarker.setLatLng([lat, lng]);
+                                    window.map.panTo([lat, lng], { animate: true, duration: 0.8 });
+                                }
 
                                 var arrowElem = document.getElementById('driver-nav-arrow');
                                 if (arrowElem && heading !== undefined) {
                                     arrowElem.style.transform = 'rotate(' + heading + 'deg)';
+                                }
+
+                                var labelElem = document.getElementById('live-marker-label');
+                                if (labelElem && labelText) {
+                                    labelElem.innerText = labelText;
                                 }
                             };
 
@@ -768,42 +848,44 @@ fun LeafletMapViewScreen(
             .fillMaxSize()
             .background(AdminBg)
     ) {
-        // Top Header Bar
-        Surface(
-            color = AdminGreen,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .statusBarsPadding()
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
+        // Top Header Bar (Only rendered when showTopBar is true)
+        if (showTopBar) {
+            Surface(
+                color = AdminGreen,
+                modifier = Modifier.fillMaxWidth()
             ) {
-                IconButton(onClick = onBack) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = Color.White
-                    )
-                }
-                Spacer(modifier = Modifier.width(6.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = if (showAllRoutes) "Real-Time Bus Route Tracker" else if (isSingleTerminal) "Bus Terminal Hub Map" else "Bus Route Driving Map",
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = if (showAllRoutes) "Tracking ${activeRoutesList.size} Active Bus Routes on OpenStreetMap" else if (isSingleTerminal) "Terminal: $cleanStart" else "$cleanStart ➔ $cleanDest",
-                        fontSize = 12.sp,
-                        color = Color.White.copy(alpha = 0.85f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                ) {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = Color.White
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (showAllRoutes) "Real-Time Bus Route Tracker" else if (isSingleTerminal) "Bus Terminal Hub Map" else "Bus Route Driving Map",
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = if (showAllRoutes) "Tracking ${activeRoutesList.size} Active Bus Routes on OpenStreetMap" else if (isSingleTerminal) "Terminal: $cleanStart" else "$cleanStart ➔ $cleanDest",
+                            fontSize = 12.sp,
+                            color = Color.White.copy(alpha = 0.85f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
         }
@@ -854,15 +936,16 @@ fun LeafletMapViewScreen(
             )
 
             // Google Maps Style Top Turn Instruction Banner Card Overlay
-            Surface(
-                color = Color(0xFF116530),
-                shape = RoundedCornerShape(16.dp),
-                shadowElevation = 6.dp,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 12.dp, start = 16.dp, end = 16.dp)
-                    .fillMaxWidth()
-            ) {
+            if (isDriverNav && navState.isNavigating) {
+                Surface(
+                    color = Color(0xFF116530),
+                    shape = RoundedCornerShape(16.dp),
+                    shadowElevation = 6.dp,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 12.dp, start = 16.dp, end = 16.dp)
+                        .fillMaxWidth()
+                ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -936,15 +1019,16 @@ fun LeafletMapViewScreen(
             }
         }
 
-        // Bottom Google Maps Style Navigation Info Control Card
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = Color.White),
-            elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
-        ) {
+        // Bottom Google Maps Style Navigation Info Control Card (Only rendered when showBottomCard is true or actively navigating)
+        if (showBottomCard || (isDriverNav && navState.isNavigating)) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
+            ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 if (navState.isNavigating) {
                     Row(
@@ -1000,7 +1084,7 @@ fun LeafletMapViewScreen(
                             )
                         }
 
-                        if (!isSingleTerminal && !showAllRoutes) {
+                        if (isDriverNav && !isSingleTerminal && !showAllRoutes) {
                             Button(
                                 onClick = {
                                     val startL = lastCurrentLat ?: (startLat ?: 14.5995)
@@ -1031,4 +1115,6 @@ fun LeafletMapViewScreen(
             }
         }
     }
+    }
+}
 }
