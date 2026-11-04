@@ -342,6 +342,7 @@ fun ScheduleManagementScreen(user: user? = null, onBack: () -> Unit = {}) {
                         DatabaseManager.reassignScheduleDriver(
                             scheduleId = targetRej.scheduleId,
                             newDriverName = selectedNewDriver,
+                            busNumber = targetRej.busNumber,
                             onSuccess = {
                                 Toast.makeText(context, "Driver reassigned to $selectedNewDriver successfully!", Toast.LENGTH_SHORT).show()
                                 scheduleToReassign = null
@@ -677,7 +678,7 @@ fun ScheduleManagementScreen(user: user? = null, onBack: () -> Unit = {}) {
         val isEditing = editingSchedule != null
         val targetSchedule = editingSchedule
 
-        val autoScheduleId = remember { targetSchedule?.scheduleId ?: ("SCH-" + (104..999).random()) }
+        val autoScheduleId = remember(targetSchedule) { targetSchedule?.scheduleId ?: ("SCH-" + (104..999).random()) }
 
         val busOptions = if (registeredBuses.isNotEmpty()) {
             registeredBuses.map { b -> if (b.busNumber.isNotBlank()) b.busNumber else "BUS-" + b.busId }
@@ -705,19 +706,19 @@ fun ScheduleManagementScreen(user: user? = null, onBack: () -> Unit = {}) {
             listOf("Unassigned")
         }
 
-        var selectedBus by remember { mutableStateOf(targetSchedule?.busNumber ?: busOptions.firstOrNull() ?: "") }
+        var selectedBus by remember(targetSchedule) { mutableStateOf(targetSchedule?.busNumber ?: busOptions.firstOrNull() ?: "") }
         var busDropdownExpanded by remember { mutableStateOf(false) }
 
-        var selectedRoute by remember { mutableStateOf(targetSchedule?.routeName ?: routeOptions.firstOrNull() ?: "") }
+        var selectedRoute by remember(targetSchedule) { mutableStateOf(targetSchedule?.routeName ?: routeOptions.firstOrNull() ?: "") }
         var routeDropdownExpanded by remember { mutableStateOf(false) }
 
-        var selectedDriver by remember { mutableStateOf(targetSchedule?.driverName ?: "Unassigned") }
+        var selectedDriver by remember(targetSchedule) { mutableStateOf(targetSchedule?.driverName ?: "Unassigned") }
         var driverDropdownExpanded by remember { mutableStateOf(false) }
 
-        var scheduleDateInput by remember { mutableStateOf(targetSchedule?.dateDay ?: selectedFullDate) }
-        var departureTime by remember { mutableStateOf(targetSchedule?.departureTime ?: "10:00 AM") }
-        var arrivalTime by remember { mutableStateOf(targetSchedule?.arrivalTime ?: "01:30 PM") }
-        var selectedStatus by remember { mutableStateOf(targetSchedule?.status ?: "Scheduled") }
+        var scheduleDateInput by remember(targetSchedule) { mutableStateOf(targetSchedule?.dateDay ?: selectedFullDate) }
+        var departureTime by remember(targetSchedule) { mutableStateOf(targetSchedule?.departureTime ?: "10:00 AM") }
+        var arrivalTime by remember(targetSchedule) { mutableStateOf(targetSchedule?.arrivalTime ?: "01:30 PM") }
+        var selectedStatus by remember(targetSchedule) { mutableStateOf(targetSchedule?.status ?: "Scheduled") }
 
         LaunchedEffect(selectedBus, registeredBuses) {
             if (targetSchedule == null || targetSchedule.driverName == "Unassigned") {

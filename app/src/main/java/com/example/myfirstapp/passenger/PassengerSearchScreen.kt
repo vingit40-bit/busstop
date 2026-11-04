@@ -67,120 +67,36 @@ fun PassengerSearchScreen(
     onBack: () -> Unit = {},
     onDestinationSelected: (String, String) -> Unit = { _, _ -> }
 ) {
-    val context = LocalContext.current
-
-    var origin by remember { mutableStateOf("Current Location") }
-    var originFocused by remember { mutableStateOf(false) }
-    var liveOriginSuggestions by remember { mutableStateOf<List<LocationSuggestion>>(emptyList()) }
-
-    var destination by remember { mutableStateOf("") }
-    var destinationFocused by remember { mutableStateOf(false) }
-    var liveDestSuggestions by remember { mutableStateOf<List<LocationSuggestion>>(emptyList()) }
-
-    val locationPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            try {
-                val fusedLocationClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(context)
-                fusedLocationClient.lastLocation.addOnSuccessListener { location: Location? ->
-                    if (location != null) {
-                        fetchPrecisePhilippineAddress(context, location.latitude, location.longitude) { resolved ->
-                            origin = resolved
-                            Toast.makeText(context, "Location resolved accurately!", Toast.LENGTH_SHORT).show()
-                        }
-                    } else {
-                        Toast.makeText(context, "Unable to get GPS location. Ensure GPS is enabled.", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            } catch (_: SecurityException) {
-                Toast.makeText(context, "Location permission required", Toast.LENGTH_SHORT).show()
-            }
-        } else {
-            Toast.makeText(context, "Location permission denied", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    LaunchedEffect(origin) {
-        if (origin.trim().length >= 2 && !origin.startsWith("GPS") && !origin.startsWith("Brgy.")) {
-            delay(300)
-            val fetched = fetchLiveOpenStreetMapSuggestions(origin)
-            liveOriginSuggestions = fetched.distinctBy { it.title }
-        } else {
-            liveOriginSuggestions = emptyList()
-        }
-    }
-
-    LaunchedEffect(destination) {
-        if (destination.trim().length >= 2) {
-            delay(300)
-            val fetched = fetchLiveOpenStreetMapSuggestions(destination)
-            liveDestSuggestions = fetched.distinctBy { it.title }
-        } else {
-            liveDestSuggestions = emptyList()
-        }
-    }
-    
-    var routes by remember { mutableStateOf<List<BusRoute>>(emptyList()) }
-    var busStops by remember { mutableStateOf<List<BusStop>>(emptyList()) }
+    var searchQuery by remember { mutableStateOf("") }
+    var schedules by remember { mutableStateOf<List<com.example.myfirstapp.BusSchedule>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
-        DatabaseManager.listenToRoutes(
-            onUpdate = { fetchedRoutes -> routes = fetchedRoutes },
-            onError = {}
-        )
-        DatabaseManager.listenToBusStops(
-            onUpdate = { fetchedStops -> busStops = fetchedStops },
-            onError = {}
-        )
-    }
-
-    val dynamicSearches = remember(routes, busStops) {
-        val list = mutableListOf<RecentSearchItem>()
-        busStops.forEach { stop ->
-            list.add(RecentSearchItem(stop.stopName, stop.location, stop.status))
-        }
-        routes.forEach { route ->
-            list.add(RecentSearchItem(route.routeName, "${route.startPoint} ➔ ${route.destination}", route.status))
-        }
-        list
-    }
-    
-    // Track which field is opening the Leaflet map location picker: "Origin" or "Destination" or null
-    var pickerTarget by remember { mutableStateOf<String?>(null) }
-
-    val textFieldColors = OutlinedTextFieldDefaults.colors(
-        focusedTextColor = Color.Black,
-        unfocusedTextColor = Color.Black,
-        focusedContainerColor = Color.White,
-        unfocusedContainerColor = Color.White,
-        focusedLabelColor = AdminGreen,
-        unfocusedLabelColor = Color.DarkGray,
-        focusedBorderColor = AdminGreen,
-        unfocusedBorderColor = Color.LightGray
-    )
-
-    // Leaflet Map Location Picker Fullscreen Overlay
-    if (pickerTarget != null) {
-        val target = pickerTarget!!
-        val currentVal = if (target == "Origin") origin else destination
-        LeafletLocationPickerModal(
-            targetType = target,
-            initialLocation = currentVal,
-            busStops = busStops,
-            onLocationConfirmed = { selectedName, _, _ ->
-                if (target == "Origin") {
-                    origin = selectedName
-                    Toast.makeText(context, "Origin set to: $selectedName", Toast.LENGTH_SHORT).show()
-                } else {
-                    destination = selectedName
-                    Toast.makeText(context, "Destination set to: $selectedName", Toast.LENGTH_SHORT).show()
+        DatabaseManager.listenToSchedules(
+            onUpdate = { fetchedSchedules ->
+                schedules = fetchedSchedules.filter {
+                    !it.status.equals("Rejected", ignoreCase = true) &&
+                    !it.status.equals("Cancelled", ignoreCase = true)
                 }
-                pickerTarget = null
+                isLoading = false
             },
-            onDismiss = { pickerTarget = null }
+            onError = { isLoading = false }
         )
-        return
+    }
+
+    val filteredSchedules = remember(schedules, searchQuery) {
+        if (searchQuery.isBlank()) {
+            schedules
+        } else {
+            val q = searchQuery.trim().lowercase()
+            schedules.filter { sched ->
+                sched.route.routeName.lowercase().contains(q) ||
+                sched.route.startPoint.lowercase().contains(q) ||
+                sched.route.destination.lowercase().contains(q) ||
+                sched.bus.busNumber.lowercase().contains(q) ||
+                sched.bus.assignedDriver.lowercase().contains(q)
+            }
+        }
     }
 
     Column(
@@ -201,297 +117,138 @@ fun PassengerSearchScreen(
                     tint = AdminGreen
                 )
             }
-            Text("Where to go?", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+            Text("Search Buses & Routes", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.Black)
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
-        // Google Maps style Origin & Destination Input Card with Leaflet Map Picker integrations
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = Color.White),
-            elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Location Dots / Pin Indicator
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Surface(
-                            shape = CircleShape,
-                            color = Color(0xFF1976D2),
-                            modifier = Modifier.size(12.dp)
-                        ) {}
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text("┊", fontSize = 12.sp, color = Color.Gray, fontWeight = FontWeight.Bold)
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Icon(
-                            imageVector = Icons.Default.LocationOn,
-                            contentDescription = "Destination Pin",
-                            tint = Color(0xFFD32F2F),
-                            modifier = Modifier.size(16.dp)
-                        )
+        // Single Clean Type Search Input Field
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            placeholder = { Text("Search bus, route, or destination...", color = Color.Gray, fontSize = 14.sp) },
+            leadingIcon = { Icon(imageVector = Icons.Default.Search, contentDescription = "Search", tint = AdminGreen) },
+            trailingIcon = {
+                if (searchQuery.isNotEmpty()) {
+                    IconButton(onClick = { searchQuery = "" }) {
+                        Icon(imageVector = Icons.Default.Clear, contentDescription = "Clear", tint = Color.Gray)
                     }
-
-                    Spacer(modifier = Modifier.width(12.dp))
-
-                    // Input Text Fields Column
-                    Column(modifier = Modifier.weight(1f)) {
-                        // Origin Input with Live Search Autocomplete
-                        Box(modifier = Modifier.fillMaxWidth()) {
-                            Column {
-                                OutlinedTextField(
-                                    value = origin,
-                                    onValueChange = {
-                                        origin = it
-                                        originFocused = true
-                                    },
-                                    label = { Text("Your location (Origin)", color = Color.DarkGray, fontSize = 12.sp) },
-                                    singleLine = true,
-                                    colors = textFieldColors,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-
-                                if (originFocused && liveOriginSuggestions.isNotEmpty()) {
-                                    Card(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(top = 4.dp),
-                                        shape = RoundedCornerShape(12.dp),
-                                        colors = CardDefaults.cardColors(containerColor = Color.White),
-                                        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
-                                        border = BorderStroke(1.dp, Color(0xFFE0E0E0))
-                                    ) {
-                                        Column(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .heightIn(max = 220.dp)
-                                                .verticalScroll(rememberScrollState())
-                                        ) {
-                                            liveOriginSuggestions.forEach { suggestion ->
-                                                Row(
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .clickable {
-                                                            origin = suggestion.title
-                                                            originFocused = false
-                                                        }
-                                                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                                                    verticalAlignment = Alignment.CenterVertically
-                                                ) {
-                                                    Surface(
-                                                        color = Color(0xFFE3F2FD),
-                                                        shape = CircleShape,
-                                                        modifier = Modifier.size(32.dp)
-                                                    ) {
-                                                        Box(contentAlignment = Alignment.Center) {
-                                                            Icon(
-                                                                imageVector = Icons.Default.LocationOn,
-                                                                contentDescription = null,
-                                                                tint = Color(0xFF1976D2),
-                                                                modifier = Modifier.size(18.dp)
-                                                            )
-                                                        }
-                                                    }
-                                                    Spacer(modifier = Modifier.width(12.dp))
-                                                    Column(modifier = Modifier.weight(1f)) {
-                                                        Text(suggestion.title, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.Black)
-                                                        Text(suggestion.subtitle, fontSize = 11.sp, color = Color.Gray)
-                                                    }
-                                                }
-                                                HorizontalDivider(color = Color(0xFFF0F0F0))
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        // Destination Input with Live Search Autocomplete
-                        Box(modifier = Modifier.fillMaxWidth()) {
-                            Column {
-                                OutlinedTextField(
-                                    value = destination,
-                                    onValueChange = {
-                                        destination = it
-                                        destinationFocused = true
-                                    },
-                                    label = { Text("Choose final destination", color = Color.DarkGray, fontSize = 12.sp) },
-                                    placeholder = { Text("Search city, station, or terminal", color = Color.Gray) },
-                                    singleLine = true,
-                                    colors = textFieldColors,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-
-                                if (destinationFocused && liveDestSuggestions.isNotEmpty()) {
-                                    Card(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(top = 4.dp),
-                                        shape = RoundedCornerShape(12.dp),
-                                        colors = CardDefaults.cardColors(containerColor = Color.White),
-                                        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
-                                        border = BorderStroke(1.dp, Color(0xFFE0E0E0))
-                                    ) {
-                                        Column(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .heightIn(max = 220.dp)
-                                                .verticalScroll(rememberScrollState())
-                                        ) {
-                                            liveDestSuggestions.forEach { suggestion ->
-                                                Row(
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .clickable {
-                                                            destination = suggestion.title
-                                                            destinationFocused = false
-                                                        }
-                                                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                                                    verticalAlignment = Alignment.CenterVertically
-                                                ) {
-                                                    Surface(
-                                                        color = Color(0xFFFFEBEE),
-                                                        shape = CircleShape,
-                                                        modifier = Modifier.size(32.dp)
-                                                    ) {
-                                                        Box(contentAlignment = Alignment.Center) {
-                                                            Icon(
-                                                                imageVector = Icons.Default.DirectionsBus,
-                                                                contentDescription = null,
-                                                                tint = Color(0xFFD32F2F),
-                                                                modifier = Modifier.size(18.dp)
-                                                            )
-                                                        }
-                                                    }
-                                                    Spacer(modifier = Modifier.width(12.dp))
-                                                    Column(modifier = Modifier.weight(1f)) {
-                                                        Text(suggestion.title, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.Black)
-                                                        Text(suggestion.subtitle, fontSize = 11.sp, color = Color.Gray)
-                                                    }
-                                                }
-                                                HorizontalDivider(color = Color(0xFFF0F0F0))
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    // Swap Origin ⇄ Destination Button
-                    IconButton(onClick = {
-                        val temp = origin
-                        origin = destination.ifEmpty { "Current Location" }
-                        destination = temp
-                    }) {
-                        Icon(
-                            imageVector = Icons.Default.SwapVert,
-                            contentDescription = "Swap Locations",
-                            tint = AdminGreen,
-                            modifier = Modifier.size(26.dp)
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Auto GPS Button
-                OutlinedButton(
-                    onClick = { locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION) },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(10.dp),
-                    border = BorderStroke(1.dp, AdminGreen),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = AdminGreen)
-                ) {
-                    Icon(imageVector = Icons.Default.MyLocation, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Auto GPS (Detect Current Location)", fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        // Dynamic Routes & Terminals List
-        Text("Active Routes & Terminals", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.Black)
-        Spacer(modifier = Modifier.height(10.dp))
-
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
-            items(dynamicSearches) { searchItem ->
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            destination = searchItem.title
-                            onDestinationSelected(origin, searchItem.title)
-                        },
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = Color(0xFFF0F4F1),
-                            modifier = Modifier.size(36.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.History,
-                                    contentDescription = "Route/Terminal",
-                                    tint = AdminGreen,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.width(12.dp))
-
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(searchItem.title, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color.Black)
-                            Text(searchItem.address, fontSize = 12.sp, color = Color.Gray)
-                            if (searchItem.status.isNotEmpty()) {
-                                Text(searchItem.status, fontSize = 11.sp, color = AdminGreen, fontWeight = FontWeight.Medium)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Search Buses Button
-        Button(
-            onClick = {
-                if (destination.isBlank()) {
-                    Toast.makeText(context, "Please enter a destination or pick one on the Leaflet map", Toast.LENGTH_SHORT).show()
-                } else {
-                    onDestinationSelected(origin, destination)
                 }
             },
-            colors = ButtonDefaults.buttonColors(containerColor = AdminGreen),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(50.dp),
-            shape = RoundedCornerShape(12.dp)
+            singleLine = true,
+            shape = RoundedCornerShape(14.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = AdminGreen,
+                unfocusedBorderColor = Color(0xFFD0D0D0),
+                focusedContainerColor = Color.White,
+                unfocusedContainerColor = Color.White
+            ),
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(imageVector = Icons.Default.Search, contentDescription = "Search", tint = Color.White)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Search Buses & View Route Map", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            Text(
+                text = if (searchQuery.isBlank()) "All Active Trips (${filteredSchedules.size})" else "Search Results (${filteredSchedules.size})",
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.DarkGray
+            )
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        if (isLoading) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = AdminGreen)
+            }
+        } else if (filteredSchedules.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(imageVector = Icons.Default.DirectionsBus, contentDescription = "Empty", tint = Color.Gray, modifier = Modifier.size(48.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("No matching buses or routes found", fontWeight = FontWeight.Bold, color = Color.Black)
+                    Text("Try searching for a different location or bus number", fontSize = 12.sp, color = Color.Gray)
+                }
+            }
+        } else {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                items(filteredSchedules) { schedule ->
+                    val cleanStart = schedule.route.startPoint.ifBlank { "Tuy" }
+                    val cleanDest = schedule.route.destination.ifBlank { "Pasay" }
+                    val driverText = if (schedule.bus.assignedDriver.isNotBlank() && schedule.bus.assignedDriver != "Unassigned") schedule.bus.assignedDriver else "Assigned Driver"
+
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                onDestinationSelected(cleanStart, cleanDest)
+                            },
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color.White),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(imageVector = Icons.Default.DirectionsBus, contentDescription = null, tint = AdminGreen)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = schedule.route.routeName,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 16.sp,
+                                        color = Color.Black
+                                    )
+                                }
+
+                                Surface(
+                                    color = Color(0xFFE8F5E9),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        text = schedule.status.ifBlank { "Active" },
+                                        fontSize = 11.sp,
+                                        color = AdminGreen,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(imageVector = Icons.Default.Person, contentDescription = "Driver", tint = AdminGreen, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Driver: $driverText", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                            }
+
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Bus: ${schedule.bus.busNumber} • Departure: ${schedule.departureTime} - Arrival: ${schedule.arrivalTime}",
+                                fontSize = 12.sp,
+                                color = Color.DarkGray
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }

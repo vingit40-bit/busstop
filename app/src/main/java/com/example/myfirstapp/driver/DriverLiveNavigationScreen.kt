@@ -42,6 +42,10 @@ fun DriverLiveNavigationScreen(
     var currentSpeedKmh by remember { mutableStateOf(0f) }
     var currentHeading by remember { mutableStateOf(0f) }
 
+    var isTripCompleted by remember { mutableStateOf(false) }
+    var locationCallbackRef by remember { mutableStateOf<com.google.android.gms.location.LocationCallback?>(null) }
+    val fusedLocationClient = remember { com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(context) }
+
     val cleanStart = remember(schedule.route) {
         if (schedule.route.startPoint.isNotBlank() && schedule.route.startPoint != "Origin" && schedule.route.startPoint != "Central Terminal") {
             schedule.route.startPoint.replace(Regex("""^(Route:\s*|Route\s+[A-Za-z0-9-]+:\s*)+""", RegexOption.IGNORE_CASE), "").trim()
@@ -73,20 +77,61 @@ fun DriverLiveNavigationScreen(
         if (cleaned.isNotBlank()) cleaned else schedule.route.routeName
     }
 
+    // Automatically stop navigation service notification when driver exits navigation screen
     DisposableEffect(Unit) {
         onDispose {
             navManager.onDestroy()
+            locationCallbackRef?.let { cb ->
+                try {
+                    fusedLocationClient.removeLocationUpdates(cb)
+                } catch (_: Exception) {}
+            }
             NavigationService.stopService(context)
+        }
+    }
+
+    // Auto-detect arrival at destination terminal / bus stop (<= 150m)
+    val distToDestMeters = remember(lastLat, lastLng, schedule.route) {
+        if (lastLat != null && lastLng != null && schedule.route.destLat != 0.0 && schedule.route.destLng != 0.0) {
+            val results = FloatArray(1)
+            android.location.Location.distanceBetween(lastLat!!, lastLng!!, schedule.route.destLat, schedule.route.destLng, results)
+            results[0].toInt()
+        } else null
+    }
+
+    LaunchedEffect(distToDestMeters) {
+        if (distToDestMeters != null && distToDestMeters <= 150 && !isTripCompleted) {
+            isTripCompleted = true
+            DatabaseManager.updateScheduleStatus(
+                scheduleId = schedule.scheduleId,
+                newStatus = "Completed",
+                driverName = user.fullname,
+                onSuccess = {
+                    Toast.makeText(context, "Arrived at $cleanDest! Trip completed automatically.", Toast.LENGTH_LONG).show()
+                    NavigationService.stopService(context)
+                    navManager.stopNavigation()
+                    onBack()
+                },
+                onFailure = {
+                    NavigationService.stopService(context)
+                    navManager.stopNavigation()
+                    onBack()
+                }
+            )
         }
     }
 
     fun startLocationUpdates() {
         try {
-            val fusedLocationClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(context)
-            
+            NavigationService.startService(
+                context,
+                "Navigating $displayRouteName",
+                "Bus ${schedule.bus.busNumber} • Live GPS Navigation Active"
+            )
+
             // Get last known location immediately
             fusedLocationClient.lastLocation.addOnSuccessListener { loc ->
-                if (loc != null) {
+                if (loc != null && !isTripCompleted) {
                     lastLat = loc.latitude
                     lastLng = loc.longitude
                     currentSpeedKmh = if (loc.hasSpeed()) loc.speed * 3.6f else 0f
@@ -115,8 +160,9 @@ fun DriverLiveNavigationScreen(
                 com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY, 2000L
             ).setMinUpdateIntervalMillis(1000L).build()
 
-            fusedLocationClient.requestLocationUpdates(locationRequest, object : com.google.android.gms.location.LocationCallback() {
+            val callback = object : com.google.android.gms.location.LocationCallback() {
                 override fun onLocationResult(result: com.google.android.gms.location.LocationResult) {
+                    if (isTripCompleted) return
                     val loc = result.lastLocation
                     if (loc != null) {
                         lastLat = loc.latitude
@@ -140,7 +186,7 @@ fun DriverLiveNavigationScreen(
                         )
                         DatabaseManager.updateBusGpsLocation(liveLocation)
 
-                        if (navState.isNavigating) {
+                        if (!isTripCompleted && navState.isNavigating) {
                             NavigationService.updateService(
                                 context,
                                 navState.currentInstruction,
@@ -149,7 +195,10 @@ fun DriverLiveNavigationScreen(
                         }
                     }
                 }
-            }, android.os.Looper.getMainLooper())
+            }
+
+            locationCallbackRef = callback
+            fusedLocationClient.requestLocationUpdates(locationRequest, callback, android.os.Looper.getMainLooper())
         } catch (_: SecurityException) {}
     }
 

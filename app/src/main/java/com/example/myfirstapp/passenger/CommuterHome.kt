@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.myfirstapp.BookingRecord
@@ -109,29 +110,6 @@ fun BusThumbnail(
     }
 }
 
-@Composable
-private fun HomeActionCard(
-    title: String,
-    subtitle: String,
-    icon: ImageVector,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
-) {
-    Card(
-        modifier = modifier.clickable(onClick = onClick),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = TransitGreen),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(14.dp)) {
-            Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(30.dp))
-            Spacer(Modifier.height(12.dp))
-            Text(title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-            Text(subtitle, color = Color.White.copy(alpha = 0.78f), fontSize = 11.sp)
-        }
-    }
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CommuterHome(
@@ -149,6 +127,19 @@ fun CommuterHome(
 
     val todayDateStr = remember {
         SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+    }
+
+    var ratingScheduleTarget by remember { mutableStateOf<BusSchedule?>(null) }
+
+    if (ratingScheduleTarget != null) {
+        val targetSched = ratingScheduleTarget!!
+        CommuterRateDialog(
+            busNumber = targetSched.bus.busNumber,
+            driverName = targetSched.bus.assignedDriver,
+            routeName = targetSched.route.routeName,
+            commuterName = user.fullname,
+            onDismiss = { ratingScheduleTarget = null }
+        )
     }
 
     LaunchedEffect(Unit) {
@@ -176,9 +167,12 @@ fun CommuterHome(
         )
     }
 
-    val todaySchedules = remember(schedules) {
+    val activeSchedulesWithDriver = remember(schedules) {
         schedules.filter { sched ->
-            !sched.status.equals("Rejected", ignoreCase = true) && !sched.status.equals("Cancelled", ignoreCase = true)
+            !sched.status.equals("Rejected", ignoreCase = true) &&
+            !sched.status.equals("Cancelled", ignoreCase = true) &&
+            sched.bus.assignedDriver.isNotBlank() &&
+            !sched.bus.assignedDriver.equals("Unassigned", ignoreCase = true)
         }
     }
 
@@ -188,7 +182,7 @@ fun CommuterHome(
                 title = {
                     Column {
                         Text("Hello, ${user.fullname.substringBefore(' ')}!", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 19.sp)
-                        Text("Where would you like to go?", color = Color.White.copy(alpha = 0.8f), fontSize = 12.sp)
+                        Text("Where would you like to go?", color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
                     }
                 },
                 actions = {
@@ -208,7 +202,7 @@ fun CommuterHome(
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
-            // Destination search, matching the compact TransitGo home layout.
+            // Destination & Bus search bar
             Card(
                 modifier = Modifier.fillMaxWidth().clickable(onClick = onSearchClick),
                 shape = RoundedCornerShape(14.dp),
@@ -219,23 +213,13 @@ fun CommuterHome(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Search your destination", color = Color.Gray, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                    Text("Search bus, route, or destination...", color = Color.Gray, fontSize = 14.sp, modifier = Modifier.weight(1f))
                     Surface(shape = RoundedCornerShape(10.dp), color = TransitGreen, modifier = Modifier.clickable(onClick = onSearchClick)) {
                         Icon(Icons.Default.Search, contentDescription = "Search buses", tint = Color.White, modifier = Modifier.padding(9.dp).size(20.dp))
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
-
-            HomeActionCard(
-                title = "Search Bus",
-                subtitle = "Find a trip and book seats",
-                icon = Icons.Default.DirectionsBus,
-                modifier = Modifier.fillMaxWidth(),
-                onClick = onSearchClick
-            )
-
             Spacer(modifier = Modifier.height(20.dp))
 
             Row(
@@ -243,50 +227,20 @@ fun CommuterHome(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Recent Searches", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
-                TextButton(onClick = onSearchClick, contentPadding = PaddingValues(0.dp)) {
-                    Text("View all", color = TransitGreen, fontSize = 12.sp)
+                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                    Text(
+                        text = "Active Routes with Assigned Drivers",
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.DarkGray
+                    )
+                    Text(
+                        text = "${activeSchedulesWithDriver.size} active trips available",
+                        fontSize = 12.sp,
+                        color = Color.Gray
+                    )
                 }
-            }
 
-            Card(
-                modifier = Modifier.fillMaxWidth().clickable(onClick = onSearchClick),
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White)
-            ) {
-                Column {
-                    listOf("Search a route", "Explore bus terminals", "Plan your next trip").forEachIndexed { index, label ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth().clickable(onClick = onSearchClick).padding(horizontal = 14.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Surface(shape = RoundedCornerShape(50), color = Color(0xFFE8F5EC), modifier = Modifier.size(34.dp)) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(if (index == 1) Icons.Default.Place else Icons.Default.History, contentDescription = null, tint = TransitGreen, modifier = Modifier.size(18.dp))
-                                }
-                            }
-                            Spacer(Modifier.width(10.dp))
-                            Text(label, color = Color(0xFF26332B), fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
-                            Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Color.Gray)
-                        }
-                        if (index < 2) HorizontalDivider(color = Color(0xFFF0F2F0))
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Available Buses Scheduled Today",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.DarkGray
-                )
                 Surface(
                     shape = RoundedCornerShape(8.dp),
                     color = Color(0xFFE8F5E9)
@@ -296,6 +250,7 @@ fun CommuterHome(
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         color = TransitGreen,
+                        maxLines = 1,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                     )
                 }
@@ -304,21 +259,25 @@ fun CommuterHome(
             Spacer(modifier = Modifier.height(10.dp))
 
             if (isLoading) {
-                Box(modifier = Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
+                Box(modifier = Modifier.fillMaxWidth().height(160.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = TransitGreen)
                 }
             } else if (errorMessage.isNotEmpty()) {
                 Text(text = errorMessage, color = Color.Red, fontSize = 14.sp)
-            } else if (todaySchedules.isEmpty()) {
-                Box(modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
-                    Text("No bus schedules available today.", color = Color.Gray, fontSize = 15.sp)
+            } else if (activeSchedulesWithDriver.isEmpty()) {
+                Box(modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(imageVector = Icons.Default.DirectionsBus, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(48.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("No active routes with assigned drivers found.", color = Color.Gray, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                    }
                 }
             } else {
                 Column(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    todaySchedules.forEach { schedule ->
+                    activeSchedulesWithDriver.forEach { schedule ->
                         val fareDisplay = if (schedule.route.fare > 0) schedule.route.fare else schedule.route.calculateEstimatedFare()
                         val tripDurationText = calculateTripDurationFormatted(schedule.departureTime, schedule.arrivalTime)
 
@@ -385,11 +344,26 @@ fun CommuterHome(
                                     color = Color.DarkGray
                                 )
                                 Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = "Driver: ${schedule.bus.assignedDriver}",
-                                    fontSize = 11.sp,
-                                    color = Color.Gray
-                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Driver: ${schedule.bus.assignedDriver}",
+                                        fontSize = 12.sp,
+                                        color = Color.DarkGray,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    TextButton(
+                                        onClick = { ratingScheduleTarget = schedule },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                                    ) {
+                                        Icon(Icons.Default.Star, contentDescription = "Rate Driver", tint = Color(0xFFFFB300), modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Rate Driver", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TransitGreen)
+                                    }
+                                }
 
                                 Spacer(modifier = Modifier.height(8.dp))
 
@@ -398,18 +372,26 @@ fun CommuterHome(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Column {
+                                    Column(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .padding(end = 8.dp)
+                                    ) {
                                         Text(
                                             text = "Bus: ${schedule.bus.busNumber} • ${schedule.bus.busType.ifBlank { "Air-conditioned" }}",
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.SemiBold,
-                                            color = Color.DarkGray
+                                            color = Color.DarkGray,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
                                         )
+                                        Spacer(modifier = Modifier.height(2.dp))
                                         Text(
                                             text = "Remaining Seats: $remainingSeats / $totalCapacity",
                                             fontSize = 12.sp,
                                             color = if (!isFullyBooked) TransitGreen else Color(0xFFC62828),
-                                            fontWeight = FontWeight.Bold
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1
                                         )
                                     }
 
@@ -425,11 +407,21 @@ fun CommuterHome(
                                             containerColor = if (isFullyBooked) Color.Gray else TransitGreen
                                         ),
                                         shape = RoundedCornerShape(10.dp),
-                                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                                     ) {
-                                        Text(if (isFullyBooked) "Full" else "Select", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                        Text(
+                                            text = if (isFullyBooked) "Full" else "Select",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp,
+                                            maxLines = 1,
+                                            softWrap = false
+                                        )
                                         Spacer(modifier = Modifier.width(2.dp))
-                                        Icon(imageVector = Icons.Default.ChevronRight, contentDescription = "Select", modifier = Modifier.size(18.dp))
+                                        Icon(
+                                            imageVector = Icons.Default.ChevronRight,
+                                            contentDescription = "Select",
+                                            modifier = Modifier.size(16.dp)
+                                        )
                                     }
                                 }
                             }

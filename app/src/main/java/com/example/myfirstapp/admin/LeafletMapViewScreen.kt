@@ -301,6 +301,16 @@ fun LeafletMapViewScreen(
     val liveBusLngJS = if (liveBusLng != null && liveBusLng != 0.0) liveBusLng.toString() else "null"
     val liveBusLabelJS = remember(liveBusLabel) { liveBusLabel.replace("'", "\\'") }
 
+    LaunchedEffect(liveBusLabel, isMapLoaded) {
+        if (isMapLoaded && liveBusLabel.isNotBlank()) {
+            val cleanLabel = liveBusLabel.replace("'", "\\'")
+            webViewRef?.evaluateJavascript(
+                "var labelElem = document.getElementById('live-marker-label'); if(labelElem) { labelElem.innerText = '$cleanLabel'; }",
+                null
+            )
+        }
+    }
+
     LaunchedEffect(liveBusLat, liveBusLng, liveBusHeading, liveBusLabel, isMapLoaded) {
         if (isMapLoaded && liveBusLat != null && liveBusLng != null && liveBusLat != 0.0 && liveBusLng != 0.0) {
             val cleanLabel = liveBusLabel.replace("'", "\\'")

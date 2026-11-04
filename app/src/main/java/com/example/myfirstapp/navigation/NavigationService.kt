@@ -32,11 +32,13 @@ class NavigationService : Service() {
                 putExtra(EXTRA_INSTRUCTION, instruction)
                 putExtra(EXTRA_DIST_REMAINING, distanceInfo)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (_: Exception) {}
         }
 
         fun updateService(context: Context, instruction: String, distanceInfo: String) {
@@ -45,14 +47,27 @@ class NavigationService : Service() {
                 putExtra(EXTRA_INSTRUCTION, instruction)
                 putExtra(EXTRA_DIST_REMAINING, distanceInfo)
             }
-            context.startService(intent)
+            try {
+                context.startService(intent)
+            } catch (_: Exception) {}
         }
 
         fun stopService(context: Context) {
-            val intent = Intent(context, NavigationService::class.java).apply {
-                action = ACTION_STOP_NAV
-            }
-            context.stopService(intent)
+            try {
+                val intent = Intent(context, NavigationService::class.java).apply {
+                    action = ACTION_STOP_NAV
+                }
+                context.startService(intent)
+            } catch (_: Exception) {}
+
+            try {
+                context.stopService(Intent(context, NavigationService::class.java))
+            } catch (_: Exception) {}
+
+            try {
+                val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                manager?.cancel(NOTIFICATION_ID)
+            } catch (_: Exception) {}
         }
     }
 
@@ -62,19 +77,31 @@ class NavigationService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_STOP_NAV -> {
-                stopForeground(true)
-                stopSelf()
-            }
-            ACTION_START_NAV, ACTION_UPDATE_NAV -> {
-                val instruction = intent.getStringExtra(EXTRA_INSTRUCTION) ?: "Navigating route..."
-                val distanceInfo = intent.getStringExtra(EXTRA_DIST_REMAINING) ?: "TransitGo Navigation"
-                val notification = buildNotification(instruction, distanceInfo)
-                startForeground(NOTIFICATION_ID, notification)
-            }
+        if (intent?.action == ACTION_STOP_NAV) {
+            removeNotificationAndStop()
+            return START_NOT_STICKY
         }
+
+        val instruction = intent?.getStringExtra(EXTRA_INSTRUCTION) ?: "Navigating route..."
+        val distanceInfo = intent?.getStringExtra(EXTRA_DIST_REMAINING) ?: "TransitGo Navigation"
+        val notification = buildNotification(instruction, distanceInfo)
+        startForeground(NOTIFICATION_ID, notification)
+
         return START_STICKY
+    }
+
+    private fun removeNotificationAndStop() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            manager?.cancel(NOTIFICATION_ID)
+        } catch (_: Exception) {}
+        stopSelf()
     }
 
     private fun buildNotification(instruction: String, distanceInfo: String): Notification {
@@ -88,6 +115,16 @@ class NavigationService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
         )
 
+        val stopNavIntent = Intent(this, NavigationService::class.java).apply {
+            action = ACTION_STOP_NAV
+        }
+        val stopPendingIntent = PendingIntent.getService(
+            this,
+            1,
+            stopNavIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
+        )
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("TransitGo • $instruction")
             .setContentText(distanceInfo)
@@ -95,6 +132,7 @@ class NavigationService : Service() {
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(pendingIntent)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "End Navigation", stopPendingIntent)
             .setCategory(NotificationCompat.CATEGORY_NAVIGATION)
             .build()
     }
@@ -112,6 +150,11 @@ class NavigationService : Service() {
             val manager = getSystemService(NotificationManager::class.java)
             manager?.createNotificationChannel(channel)
         }
+    }
+
+    override fun onDestroy() {
+        removeNotificationAndStop()
+        super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

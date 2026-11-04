@@ -10,6 +10,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.DirectionsBus
 import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -21,7 +22,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.myfirstapp.BusSchedule
 import com.example.myfirstapp.DatabaseManager
-import com.example.myfirstapp.admin.LeafletMapViewScreen
 import com.example.myfirstapp.user
 
 val DriverGreen = Color(0xFF116530)
@@ -51,6 +51,8 @@ fun DriverScheduleScreen(
     )
     var selectedReason by remember { mutableStateOf(validReasons[0]) }
 
+    val driverNameClean = remember(user.fullname) { user.fullname.trim().lowercase() }
+
     LaunchedEffect(Unit) {
         DatabaseManager.listenToSchedules(
             onUpdate = { list ->
@@ -62,6 +64,22 @@ fun DriverScheduleScreen(
                 isLoading = false
             }
         )
+    }
+
+    // Automatically restore active live navigation session if a trip is "In Transit"
+    LaunchedEffect(schedules) {
+        if (activeNavigationSchedule == null && schedules.isNotEmpty()) {
+            val inTransitSched = schedules.find { s ->
+                s.status.equals("In Transit", ignoreCase = true) &&
+                (s.bus.assignedDriver.isBlank() || s.bus.assignedDriver == "Unassigned" ||
+                 s.bus.assignedDriver.lowercase().contains(driverNameClean) ||
+                 driverNameClean.contains(s.bus.assignedDriver.lowercase()))
+            }
+            if (inTransitSched != null) {
+                activeNavigationSchedule = inTransitSched
+                selectedTab = "Accepted"
+            }
+        }
     }
 
     if (activeNavigationSchedule != null) {
@@ -130,7 +148,6 @@ fun DriverScheduleScreen(
         )
     }
 
-    val driverNameClean = user.fullname.trim().lowercase()
     val filteredSchedules = remember(schedules, selectedTab, driverNameClean) {
         when (selectedTab) {
             "Pending" -> schedules.filter {
@@ -228,6 +245,8 @@ fun DriverScheduleScreen(
                     modifier = Modifier.fillMaxSize()
                 ) {
                     items(filteredSchedules) { schedule ->
+                        val isInTransit = schedule.status.equals("In Transit", ignoreCase = true)
+
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
@@ -248,7 +267,7 @@ fun DriverScheduleScreen(
                                     Surface(
                                         shape = RoundedCornerShape(8.dp),
                                         color = when (schedule.status) {
-                                            "In Transit" -> Color(0xFF2196F3)
+                                            "In Transit" -> Color(0xFF2E7D32)
                                             "Completed" -> Color(0xFF4CAF50)
                                             "Accepted" -> Color(0xFF116530)
                                             "Rejected" -> Color(0xFFFFEBEE)
@@ -313,20 +332,32 @@ fun DriverScheduleScreen(
                                     "Accepted" -> {
                                         Button(
                                             onClick = {
-                                                DatabaseManager.updateScheduleStatus(
-                                                    scheduleId = schedule.scheduleId,
-                                                    newStatus = "In Transit",
-                                                    driverName = user.fullname
-                                                )
-                                                Toast.makeText(context, "Trip Started! Launching Live Navigation...", Toast.LENGTH_SHORT).show()
+                                                if (!isInTransit) {
+                                                    DatabaseManager.updateScheduleStatus(
+                                                        scheduleId = schedule.scheduleId,
+                                                        newStatus = "In Transit",
+                                                        driverName = user.fullname
+                                                    )
+                                                    Toast.makeText(context, "Trip Started! Launching Persistent Navigation...", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    Toast.makeText(context, "Resuming Live Navigation Progress...", Toast.LENGTH_SHORT).show()
+                                                }
                                                 activeNavigationSchedule = schedule
                                             },
-                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2196F3)),
+                                            colors = ButtonDefaults.buttonColors(containerColor = if (isInTransit) Color(0xFF2E7D32) else Color(0xFF2196F3)),
                                             modifier = Modifier.fillMaxWidth()
                                         ) {
-                                            Icon(imageVector = Icons.Default.Map, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Icon(
+                                                imageVector = if (isInTransit) Icons.Default.Navigation else Icons.Default.Map,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
                                             Spacer(modifier = Modifier.width(6.dp))
-                                            Text("Start Trip (Live Navigation)", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                            Text(
+                                                text = if (isInTransit) "Resume Trip (Live Navigation Active)" else "Start Trip (Live Navigation)",
+                                                fontSize = 14.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
                                         }
                                     }
                                     "Rejected" -> {

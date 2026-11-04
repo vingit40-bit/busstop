@@ -167,7 +167,7 @@ object DatabaseManager {
                 setRequestProperty("apikey", SUPABASE_KEY)
                 setRequestProperty("Authorization", "Bearer $SUPABASE_KEY")
                 setRequestProperty("Content-Type", "application/json")
-                setRequestProperty("Prefer", "resolution=merge-duplicates,return=representation")
+                setRequestProperty("Prefer", "return=representation")
                 doInput = true
                 if (jsonBody != null && (method == "POST" || method == "PATCH" || method == "PUT")) {
                     doOutput = true
@@ -717,7 +717,20 @@ object DatabaseManager {
                 put("schedule_date", scheduleDate)
             }.toString()
 
-            val res = makeRequest("bus_schedules", "POST", json)
+            val encodedSchedId = java.net.URLEncoder.encode(schedule.scheduleId.trim(), "UTF-8")
+            var res = makeRequest("bus_schedules?schedule_id=eq.$encodedSchedId", "PATCH", json)
+            if (res == null || res == "[]") {
+                res = makeRequest("bus_schedules", "POST", json)
+            }
+
+            if (resolvedDriver.isNotBlank() && resolvedDriver != "Unassigned") {
+                val encodedBusNum = java.net.URLEncoder.encode(schedule.bus.busNumber.trim(), "UTF-8")
+                val busPatchJson = JSONObject().apply {
+                    put("assigned_driver", resolvedDriver)
+                }.toString()
+                makeRequest("buses?bus_number=eq.$encodedBusNum", "PATCH", busPatchJson)
+            }
+
             withContext(Dispatchers.Main) {
                 if (res != null) onSuccess() else onFailure(Exception("Failed to save schedule"))
             }
@@ -822,12 +835,11 @@ object DatabaseManager {
                             } else {
                                 "Unassigned"
                             }
-                            matchedBus.assignedDriver = resolvedDriver
-                            if (scheduleDate.isNotBlank()) {
-                                matchedBus.operator = scheduleDate
+                            val scheduleBus = matchedBus.copy(assignedDriver = resolvedDriver).apply {
+                                if (scheduleDate.isNotBlank()) operator = scheduleDate
                             }
 
-                            val scheduleObj = BusSchedule(scheduleId, matchedBus, matchedRoute, departureTime, arrivalTime)
+                            val scheduleObj = BusSchedule(scheduleId, scheduleBus, matchedRoute, departureTime, arrivalTime)
                             scheduleObj.status = status
                             scheduleObj.rejectionReason = rejectionReason
                             scheduleObj.scheduleDate = scheduleDate
@@ -850,7 +862,8 @@ object DatabaseManager {
         onFailure: (Exception) -> Unit = {}
     ) {
         ioScope.launch {
-            val res = makeRequest("bus_schedules?schedule_id=eq.$scheduleId", "DELETE")
+            val encodedId = java.net.URLEncoder.encode(scheduleId.trim(), "UTF-8")
+            val res = makeRequest("bus_schedules?schedule_id=eq.$encodedId", "DELETE")
             withContext(Dispatchers.Main) {
                 if (res != null) onSuccess() else onFailure(Exception("Failed to delete schedule"))
             }
@@ -915,22 +928,29 @@ object DatabaseManager {
     fun reassignScheduleDriver(
         scheduleId: String,
         newDriverName: String,
+        busNumber: String = "",
         onSuccess: () -> Unit = {},
         onFailure: (Exception) -> Unit = {}
     ) {
         ioScope.launch {
+            val encodedSchedId = java.net.URLEncoder.encode(scheduleId.trim(), "UTF-8")
             val jsonObj = JSONObject().apply {
                 put("driver_name", newDriverName)
                 put("status", "Scheduled")
+                put("rejection_reason", "")
             }.toString()
 
-            var res = makeRequest("bus_schedules?schedule_id=eq.$scheduleId", "PATCH", jsonObj)
-            if (res == null) {
-                val fallbackJson = JSONObject().apply {
-                    put("driver_name", newDriverName)
-                    put("status", "Scheduled")
+            var res = makeRequest("bus_schedules?schedule_id=eq.$encodedSchedId", "PATCH", jsonObj)
+            if (res == null || res == "[]") {
+                res = makeRequest("bus_schedules", "POST", jsonObj)
+            }
+
+            if (busNumber.isNotBlank()) {
+                val encodedBusNum = java.net.URLEncoder.encode(busNumber.trim(), "UTF-8")
+                val busPatchJson = JSONObject().apply {
+                    put("assigned_driver", newDriverName)
                 }.toString()
-                res = makeRequest("bus_schedules?schedule_id=eq.$scheduleId", "PATCH", fallbackJson)
+                makeRequest("buses?bus_number=eq.$encodedBusNum", "PATCH", busPatchJson)
             }
 
             withContext(Dispatchers.Main) {
@@ -1362,12 +1382,14 @@ object DatabaseManager {
             }.toString()
 
             try {
-                var res = makeRequest("bus_locations?bus_id=eq.${location.busId}", "PATCH", json)
-                if (res == null) {
+                val encodedBusId = java.net.URLEncoder.encode(location.busId.trim(), "UTF-8")
+                var res = makeRequest("bus_locations?bus_id=eq.$encodedBusId", "PATCH", json)
+                if (res == null || res == "[]") {
                     res = makeRequest("bus_locations", "POST", json)
                 }
                 withContext(Dispatchers.Main) { onSuccess() }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Log.e("Supabase", "Failed to update bus GPS location: ${e.localizedMessage}")
                 withContext(Dispatchers.Main) { onSuccess() }
             }
         }
@@ -1410,6 +1432,31 @@ object DatabaseManager {
                     onUpdate(currentList)
                 }
                 delay(2000)
+            }
+        }
+    }
+
+    fun submitDriverRating(
+        rating: com.example.myfirstapp.passenger.DriverRating,
+        onSuccess: () -> Unit = {},
+        onFailure: (Exception) -> Unit = {}
+    ) {
+        ioScope.launch {
+            val json = JSONObject().apply {
+                put("rating_id", rating.ratingId)
+                put("bus_id", rating.busId)
+                put("bus_number", rating.busNumber)
+                put("driver_name", rating.driverName)
+                put("route_name", rating.routeName)
+                put("rating_stars", rating.ratingStars)
+                put("feedback_text", rating.feedbackText)
+                put("commuter_name", rating.commuterName)
+                put("created_at", rating.timestamp)
+            }.toString()
+
+            val res = makeRequest("driver_ratings", "POST", json)
+            withContext(Dispatchers.Main) {
+                if (res != null) onSuccess() else onFailure(Exception("Failed to submit rating"))
             }
         }
     }
