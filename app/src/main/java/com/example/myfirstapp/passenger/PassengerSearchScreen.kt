@@ -71,12 +71,24 @@ fun PassengerSearchScreen(
     var schedules by remember { mutableStateOf<List<com.example.myfirstapp.BusSchedule>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
 
+    val todayFullDateStr = remember {
+        java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.ENGLISH).format(java.util.Date())
+    }
+
     LaunchedEffect(Unit) {
         DatabaseManager.listenToSchedules(
             onUpdate = { fetchedSchedules ->
-                schedules = fetchedSchedules.filter {
-                    !it.status.equals("Rejected", ignoreCase = true) &&
-                    !it.status.equals("Cancelled", ignoreCase = true)
+                schedules = fetchedSchedules.filter { sched ->
+                    // 1. Only today's schedule
+                    (sched.scheduleDate.isBlank() || sched.scheduleDate == todayFullDateStr) &&
+                    // 2. Active status (not rejected, cancelled, or inactive)
+                    !sched.status.equals("Rejected", ignoreCase = true) &&
+                    !sched.status.equals("Cancelled", ignoreCase = true) &&
+                    !sched.status.equals("Inactive", ignoreCase = true) &&
+                    // 3. Must have available bus & assigned driver
+                    sched.bus.busNumber.isNotBlank() &&
+                    sched.bus.assignedDriver.isNotBlank() &&
+                    !sched.bus.assignedDriver.equals("Unassigned", ignoreCase = true)
                 }
                 isLoading = false
             },
@@ -153,12 +165,32 @@ fun PassengerSearchScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = if (searchQuery.isBlank()) "All Active Trips (${filteredSchedules.size})" else "Search Results (${filteredSchedules.size})",
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.DarkGray
-            )
+            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                Text(
+                    text = if (searchQuery.isBlank()) "Today's Active Trips (${filteredSchedules.size})" else "Search Results (${filteredSchedules.size})",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.DarkGray
+                )
+                Text(
+                    text = "Showing available buses & assigned drivers",
+                    fontSize = 11.sp,
+                    color = Color.Gray
+                )
+            }
+
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = Color(0xFFE8F5E9)
+            ) {
+                Text(
+                    text = todayFullDateStr,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AdminGreen,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(10.dp))

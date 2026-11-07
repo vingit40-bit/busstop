@@ -355,13 +355,38 @@ fun CommuterHome(
                                         color = Color.DarkGray,
                                         fontWeight = FontWeight.Medium
                                     )
+
+                                    val isCompletedTrip = schedule.status.equals("Completed", ignoreCase = true) ||
+                                            schedule.status.equals("Arrived", ignoreCase = true) ||
+                                            schedule.status.equals("Finished", ignoreCase = true)
+
                                     TextButton(
-                                        onClick = { ratingScheduleTarget = schedule },
+                                        onClick = {
+                                            if (isCompletedTrip) {
+                                                ratingScheduleTarget = schedule
+                                            } else {
+                                                Toast.makeText(
+                                                    context,
+                                                    "You can only rate the driver after the ride is completed.",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                        },
                                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
                                     ) {
-                                        Icon(Icons.Default.Star, contentDescription = "Rate Driver", tint = Color(0xFFFFB300), modifier = Modifier.size(16.dp))
+                                        Icon(
+                                            imageVector = Icons.Default.Star,
+                                            contentDescription = "Rate Driver",
+                                            tint = if (isCompletedTrip) Color(0xFFFFB300) else Color.Gray,
+                                            modifier = Modifier.size(16.dp)
+                                        )
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Rate Driver", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TransitGreen)
+                                        Text(
+                                            text = if (isCompletedTrip) "Rate Driver" else "Rate (Completed Only)",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isCompletedTrip) TransitGreen else Color.Gray
+                                        )
                                     }
                                 }
 

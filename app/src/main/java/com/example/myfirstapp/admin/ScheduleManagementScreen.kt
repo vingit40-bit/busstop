@@ -203,19 +203,20 @@ fun ScheduleManagementScreen(user: user? = null, onBack: () -> Unit = {}) {
         )
     }
 
-    // Dynamic Real Calendar Ribbon Generator (Calculates real day names & dates relative to selected date)
-    val dynamicCalendarDays = remember(selectedFullDate) {
+    // Dynamic Real Calendar Ribbon Generator (Starts from Today, disabling past dates)
+    val dynamicCalendarDays = remember(selectedFullDate, todayFullDateStr) {
         val sdfDayName = SimpleDateFormat("EEE", Locale.ENGLISH)
         val sdfDayNum = SimpleDateFormat("dd", Locale.ENGLISH)
         val sdfFull = SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH)
 
         val cal = Calendar.getInstance()
+        val anchorDate = if (selectedFullDate >= todayFullDateStr) selectedFullDate else todayFullDateStr
         try {
-            cal.time = sdfFull.parse(selectedFullDate) ?: Date()
+            cal.time = sdfFull.parse(anchorDate) ?: Date()
         } catch (_: Exception) {}
 
-        cal.add(Calendar.DAY_OF_YEAR, -3)
         val list = mutableListOf<Triple<String, String, String>>()
+        // Generate Today + 6 future days
         for (i in 0 until 7) {
             val dName = sdfDayName.format(cal.time)
             val dNum = sdfDayNum.format(cal.time)
@@ -473,15 +474,16 @@ fun ScheduleManagementScreen(user: user? = null, onBack: () -> Unit = {}) {
                     val dayNum = triple.second
                     val fullDateStr = triple.third
                     val isSelected = selectedFullDate == fullDateStr
+                    val isPastDate = fullDateStr < todayFullDateStr
 
                     Card(
                         modifier = Modifier
                             .width(52.dp)
                             .height(68.dp)
-                            .clickable { selectedFullDate = fullDateStr },
+                            .clickable(enabled = !isPastDate) { selectedFullDate = fullDateStr },
                         shape = RoundedCornerShape(12.dp),
                         colors = CardDefaults.cardColors(
-                            containerColor = if (isSelected) AdminGreen else Color.White
+                            containerColor = if (isSelected) AdminGreen else if (isPastDate) Color(0xFFEEEEEE) else Color.White
                         ),
                         elevation = CardDefaults.cardElevation(defaultElevation = if (isSelected) 4.dp else 1.dp)
                     ) {
@@ -494,14 +496,14 @@ fun ScheduleManagementScreen(user: user? = null, onBack: () -> Unit = {}) {
                                 text = dayName.uppercase(),
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = if (isSelected) Color.White.copy(alpha = 0.85f) else Color.Gray
+                                color = if (isSelected) Color.White.copy(alpha = 0.85f) else if (isPastDate) Color.LightGray else Color.Gray
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
                                 text = dayNum,
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.ExtraBold,
-                                color = if (isSelected) Color.White else Color.Black
+                                color = if (isSelected) Color.White else if (isPastDate) Color.LightGray else Color.Black
                             )
                         }
                     }
@@ -632,6 +634,24 @@ fun ScheduleManagementScreen(user: user? = null, onBack: () -> Unit = {}) {
         }
     }
 
+    val todayUtcMillis = remember {
+        val cal = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        cal.timeInMillis
+    }
+
+    val futureOnlySelectableDates = remember(todayUtcMillis) {
+        object : SelectableDates {
+            override fun isSelectableDate(utcTimeMillis: Long): Boolean {
+                return utcTimeMillis >= todayUtcMillis
+            }
+        }
+    }
+
     // GOOGLE CALENDAR STYLE MATERIAL 3 DATE PICKER DIALOG MODAL
     if (showDatePickerModal) {
         val initialMillis = remember(selectedFullDate) {
@@ -642,7 +662,10 @@ fun ScheduleManagementScreen(user: user? = null, onBack: () -> Unit = {}) {
             }
         }
         
-        val datePickerState = rememberDatePickerState(initialSelectedDateMillis = initialMillis)
+        val datePickerState = rememberDatePickerState(
+            initialSelectedDateMillis = initialMillis,
+            selectableDates = futureOnlySelectableDates
+        )
 
         DatePickerDialog(
             onDismissRequest = { showDatePickerModal = false },
@@ -715,7 +738,10 @@ fun ScheduleManagementScreen(user: user? = null, onBack: () -> Unit = {}) {
         var selectedDriver by remember(targetSchedule) { mutableStateOf(targetSchedule?.driverName ?: "Unassigned") }
         var driverDropdownExpanded by remember { mutableStateOf(false) }
 
-        var scheduleDateInput by remember(targetSchedule) { mutableStateOf(targetSchedule?.dateDay ?: selectedFullDate) }
+        val initialValidDate = remember(targetSchedule, selectedFullDate, todayFullDateStr) {
+            targetSchedule?.dateDay ?: if (selectedFullDate >= todayFullDateStr) selectedFullDate else todayFullDateStr
+        }
+        var scheduleDateInput by remember(targetSchedule) { mutableStateOf(initialValidDate) }
         var departureTime by remember(targetSchedule) { mutableStateOf(targetSchedule?.departureTime ?: "10:00 AM") }
         var arrivalTime by remember(targetSchedule) { mutableStateOf(targetSchedule?.arrivalTime ?: "01:30 PM") }
         var selectedStatus by remember(targetSchedule) { mutableStateOf(targetSchedule?.status ?: "Scheduled") }
@@ -838,19 +864,69 @@ fun ScheduleManagementScreen(user: user? = null, onBack: () -> Unit = {}) {
                         )
                     }
 
-                    // Schedule Date Field
+                    // Schedule Date Field with Material 3 Date Picker Modal (Disables past dates)
+                    var showScheduleDatePickerModal by remember { mutableStateOf(false) }
+
+                    if (showScheduleDatePickerModal) {
+                        val initialMillis = remember(scheduleDateInput, todayUtcMillis) {
+                            try {
+                                val time = SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).parse(scheduleDateInput)?.time ?: System.currentTimeMillis()
+                                if (time < todayUtcMillis) System.currentTimeMillis() else time
+                            } catch (_: Exception) {
+                                System.currentTimeMillis()
+                            }
+                        }
+
+                        val scheduleDatePickerState = rememberDatePickerState(
+                            initialSelectedDateMillis = initialMillis,
+                            selectableDates = futureOnlySelectableDates
+                        )
+
+                        DatePickerDialog(
+                            onDismissRequest = { showScheduleDatePickerModal = false },
+                            confirmButton = {
+                                Button(
+                                    onClick = {
+                                        val selectedMillis = scheduleDatePickerState.selectedDateMillis
+                                        if (selectedMillis != null) {
+                                            val cal = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
+                                                timeInMillis = selectedMillis
+                                            }
+                                            val pickedDate = SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).format(cal.time)
+                                            scheduleDateInput = pickedDate
+                                        }
+                                        showScheduleDatePickerModal = false
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = AdminGreen)
+                                ) {
+                                    Text("Select Date", color = Color.White, fontWeight = FontWeight.Bold)
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { showScheduleDatePickerModal = false }) {
+                                    Text("Cancel", color = Color.DarkGray, fontWeight = FontWeight.Medium)
+                                }
+                            }
+                        ) {
+                            DatePicker(state = scheduleDatePickerState)
+                        }
+                    }
+
                     OutlinedTextField(
                         value = scheduleDateInput,
                         onValueChange = { scheduleDateInput = it },
+                        readOnly = true,
                         label = { Text("Schedule Date (YYYY-MM-DD)", color = Color.DarkGray) },
                         singleLine = true,
                         trailingIcon = {
-                            IconButton(onClick = { showDatePickerModal = true }) {
+                            IconButton(onClick = { showScheduleDatePickerModal = true }) {
                                 Icon(imageVector = Icons.Default.CalendarToday, contentDescription = "Pick Date", tint = AdminGreen)
                             }
                         },
                         colors = textFieldColors,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showScheduleDatePickerModal = true }
                     )
 
                     // 1. SELECT BUS (Connected to Bus Management)

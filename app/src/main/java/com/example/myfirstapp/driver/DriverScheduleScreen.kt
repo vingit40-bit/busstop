@@ -40,6 +40,7 @@ fun DriverScheduleScreen(
 
     var selectedTab by remember { mutableStateOf("Pending") } // "Pending", "Accepted", "Rejected"
     var activeNavigationSchedule by remember { mutableStateOf<BusSchedule?>(null) }
+    var hasUserDismissedNav by remember { mutableStateOf(false) }
 
     var scheduleToReject by remember { mutableStateOf<BusSchedule?>(null) }
     val validReasons = listOf(
@@ -66,9 +67,9 @@ fun DriverScheduleScreen(
         )
     }
 
-    // Automatically restore active live navigation session if a trip is "In Transit"
+    // Auto-restore active navigation on initial load unless driver explicitly backed out
     LaunchedEffect(schedules) {
-        if (activeNavigationSchedule == null && schedules.isNotEmpty()) {
+        if (!hasUserDismissedNav && activeNavigationSchedule == null && schedules.isNotEmpty()) {
             val inTransitSched = schedules.find { s ->
                 s.status.equals("In Transit", ignoreCase = true) &&
                 (s.bus.assignedDriver.isBlank() || s.bus.assignedDriver == "Unassigned" ||
@@ -87,7 +88,10 @@ fun DriverScheduleScreen(
         DriverLiveNavigationScreen(
             schedule = sched,
             user = user,
-            onBack = { activeNavigationSchedule = null }
+            onBack = {
+                hasUserDismissedNav = true
+                activeNavigationSchedule = null
+            }
         )
         return
     }
@@ -151,15 +155,21 @@ fun DriverScheduleScreen(
     val filteredSchedules = remember(schedules, selectedTab, driverNameClean) {
         when (selectedTab) {
             "Pending" -> schedules.filter {
+                !it.status.equals("Rejected", ignoreCase = true) &&
+                !it.status.equals("Accepted", ignoreCase = true) &&
+                !it.status.equals("In Transit", ignoreCase = true) &&
+                !it.status.equals("Completed", ignoreCase = true) &&
+                it.rejectionReason.isBlank() &&
                 (it.status.equals("Scheduled", ignoreCase = true) || it.status.isBlank()) &&
                 (it.bus.assignedDriver.isBlank() || it.bus.assignedDriver == "Unassigned" || it.bus.assignedDriver.lowercase().contains(driverNameClean) || driverNameClean.contains(it.bus.assignedDriver.lowercase()))
             }
             "Accepted" -> schedules.filter {
+                !it.status.equals("Rejected", ignoreCase = true) &&
                 (it.status.equals("Accepted", ignoreCase = true) || it.status.equals("In Transit", ignoreCase = true)) &&
                 (it.bus.assignedDriver.lowercase().contains(driverNameClean) || driverNameClean.contains(it.bus.assignedDriver.lowercase()))
             }
             "Rejected" -> schedules.filter {
-                it.status.equals("Rejected", ignoreCase = true) &&
+                (it.status.equals("Rejected", ignoreCase = true) || it.rejectionReason.isNotBlank()) &&
                 (it.bus.assignedDriver.lowercase().contains(driverNameClean) || driverNameClean.contains(it.bus.assignedDriver.lowercase()) || it.rejectionReason.isNotBlank())
             }
             else -> schedules
@@ -332,15 +342,16 @@ fun DriverScheduleScreen(
                                     "Accepted" -> {
                                         Button(
                                             onClick = {
+                                                hasUserDismissedNav = false
                                                 if (!isInTransit) {
                                                     DatabaseManager.updateScheduleStatus(
                                                         scheduleId = schedule.scheduleId,
                                                         newStatus = "In Transit",
                                                         driverName = user.fullname
                                                     )
-                                                    Toast.makeText(context, "Trip Started! Launching Persistent Navigation...", Toast.LENGTH_SHORT).show()
+                                                    Toast.makeText(context, "Trip Started! Launching Navigation...", Toast.LENGTH_SHORT).show()
                                                 } else {
-                                                    Toast.makeText(context, "Resuming Live Navigation Progress...", Toast.LENGTH_SHORT).show()
+                                                    Toast.makeText(context, "Resuming Navigation...", Toast.LENGTH_SHORT).show()
                                                 }
                                                 activeNavigationSchedule = schedule
                                             },

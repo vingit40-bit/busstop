@@ -2,12 +2,21 @@ package com.example.myfirstapp.driver
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.GpsOff
+import com.google.android.gms.common.api.ResolvableApiException
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.LocationSettingsRequest
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -43,6 +52,7 @@ fun DriverLiveNavigationScreen(
     var currentHeading by remember { mutableStateOf(0f) }
 
     var isTripCompleted by remember { mutableStateOf(false) }
+    var isGpsDisabled by remember { mutableStateOf(false) }
     var locationCallbackRef by remember { mutableStateOf<com.google.android.gms.location.LocationCallback?>(null) }
     val fusedLocationClient = remember { com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(context) }
 
@@ -75,50 +85,6 @@ fun DriverLiveNavigationScreen(
     val displayRouteName = remember(schedule.route.routeName) {
         val cleaned = schedule.route.routeName.replace(Regex("""^(Route:\s*|Route\s+[A-Za-z0-9-]+:\s*)+""", RegexOption.IGNORE_CASE), "").trim()
         if (cleaned.isNotBlank()) cleaned else schedule.route.routeName
-    }
-
-    // Automatically stop navigation service notification when driver exits navigation screen
-    DisposableEffect(Unit) {
-        onDispose {
-            navManager.onDestroy()
-            locationCallbackRef?.let { cb ->
-                try {
-                    fusedLocationClient.removeLocationUpdates(cb)
-                } catch (_: Exception) {}
-            }
-            NavigationService.stopService(context)
-        }
-    }
-
-    // Auto-detect arrival at destination terminal / bus stop (<= 150m)
-    val distToDestMeters = remember(lastLat, lastLng, schedule.route) {
-        if (lastLat != null && lastLng != null && schedule.route.destLat != 0.0 && schedule.route.destLng != 0.0) {
-            val results = FloatArray(1)
-            android.location.Location.distanceBetween(lastLat!!, lastLng!!, schedule.route.destLat, schedule.route.destLng, results)
-            results[0].toInt()
-        } else null
-    }
-
-    LaunchedEffect(distToDestMeters) {
-        if (distToDestMeters != null && distToDestMeters <= 150 && !isTripCompleted) {
-            isTripCompleted = true
-            DatabaseManager.updateScheduleStatus(
-                scheduleId = schedule.scheduleId,
-                newStatus = "Completed",
-                driverName = user.fullname,
-                onSuccess = {
-                    Toast.makeText(context, "Arrived at $cleanDest! Trip completed automatically.", Toast.LENGTH_LONG).show()
-                    NavigationService.stopService(context)
-                    navManager.stopNavigation()
-                    onBack()
-                },
-                onFailure = {
-                    NavigationService.stopService(context)
-                    navManager.stopNavigation()
-                    onBack()
-                }
-            )
-        }
     }
 
     fun startLocationUpdates() {
@@ -202,15 +168,83 @@ fun DriverLiveNavigationScreen(
         } catch (_: SecurityException) {}
     }
 
+    val gpsSettingsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            isGpsDisabled = false
+            startLocationUpdates()
+        } else {
+            isGpsDisabled = true
+        }
+    }
+
+    fun checkGpsAndStartUpdates() {
+        val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? android.location.LocationManager
+        val gpsEnabled = locationManager?.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER) == true ||
+                locationManager?.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER) == true
+
+        isGpsDisabled = !gpsEnabled
+
+        val locationRequest = com.google.android.gms.location.LocationRequest.Builder(
+            com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY, 2000L
+        ).setMinUpdateIntervalMillis(1000L).build()
+
+        val builder = LocationSettingsRequest.Builder()
+            .addLocationRequest(locationRequest)
+            .setAlwaysShow(true)
+
+        val client = LocationServices.getSettingsClient(context)
+        client.checkLocationSettings(builder.build())
+            .addOnSuccessListener {
+                isGpsDisabled = false
+                startLocationUpdates()
+            }
+            .addOnFailureListener { exception ->
+                if (exception is ResolvableApiException) {
+                    try {
+                        val intentSenderRequest = IntentSenderRequest.Builder(exception.resolution).build()
+                        gpsSettingsLauncher.launch(intentSenderRequest)
+                    } catch (_: Exception) {
+                        startLocationUpdates()
+                    }
+                } else {
+                    startLocationUpdates()
+                }
+            }
+    }
+
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         val fineGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] ?: false
         val coarseGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] ?: false
         if (fineGranted || coarseGranted) {
-            startLocationUpdates()
+            checkGpsAndStartUpdates()
         } else {
             Toast.makeText(context, "Location permission required for GPS navigation", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    // Real-time system broadcast receiver for location provider status (Detects mid-session GPS toggling)
+    DisposableEffect(context) {
+        val filter = android.content.IntentFilter(android.location.LocationManager.PROVIDERS_CHANGED_ACTION)
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? android.location.LocationManager
+                val gpsEnabled = locationManager?.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER) == true ||
+                        locationManager?.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER) == true
+                isGpsDisabled = !gpsEnabled
+                if (gpsEnabled) {
+                    startLocationUpdates()
+                }
+            }
+        }
+        context.registerReceiver(receiver, filter)
+        onDispose {
+            try {
+                context.unregisterReceiver(receiver)
+            } catch (_: Exception) {}
         }
     }
 
@@ -219,7 +253,7 @@ fun DriverLiveNavigationScreen(
         val hasCoarse = androidx.core.content.ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
         if (hasFine || hasCoarse) {
-            startLocationUpdates()
+            checkGpsAndStartUpdates()
         } else {
             locationPermissionLauncher.launch(
                 arrayOf(
@@ -227,6 +261,32 @@ fun DriverLiveNavigationScreen(
                     Manifest.permission.ACCESS_COARSE_LOCATION
                 )
             )
+        }
+
+        // Immediately publish active location update when driver launches live navigation
+        val startL = if (schedule.route.startLat != 0.0) schedule.route.startLat else 14.0200
+        val startG = if (schedule.route.startLng != 0.0) schedule.route.startLng else 120.7300
+        val initialLocation = LiveBusLocation(
+            busId = schedule.bus.busId.ifBlank { schedule.bus.busNumber },
+            busNumber = schedule.bus.busNumber,
+            driverName = user.fullname.ifBlank { schedule.bus.assignedDriver },
+            routeName = schedule.route.routeName,
+            latitude = startL,
+            longitude = startG,
+            speedKmh = 0f,
+            heading = 0f,
+            status = "Stopped",
+            timestamp = System.currentTimeMillis()
+        )
+        DatabaseManager.updateBusGpsLocation(initialLocation)
+
+        // Continuous periodic check for GPS status while navigation screen is active
+        while (!isTripCompleted) {
+            val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? android.location.LocationManager
+            val gpsEnabled = locationManager?.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER) == true ||
+                    locationManager?.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER) == true
+            isGpsDisabled = !gpsEnabled
+            kotlinx.coroutines.delay(2000)
         }
     }
 
@@ -266,6 +326,61 @@ fun DriverLiveNavigationScreen(
                 isDriverNav = true,
                 onBack = onBack
             )
+
+            // GPS Disabled Warning Banner Overlay
+            if (isGpsDisabled) {
+                Surface(
+                    color = Color(0xFFC62828),
+                    shape = RoundedCornerShape(12.dp),
+                    shadowElevation = 6.dp,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 12.dp, start = 12.dp, end = 12.dp)
+                        .fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.GpsOff,
+                            contentDescription = "GPS Disabled",
+                            tint = Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "⚠️ GPS Location is Turned Off!",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = Color.White
+                            )
+                            Text(
+                                text = "Turn on GPS so commuters can track your live bus location.",
+                                fontSize = 11.sp,
+                                color = Color.White.copy(alpha = 0.9f)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = {
+                                try {
+                                    val intent = Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+                                    context.startActivity(intent)
+                                } catch (_: Exception) {
+                                    checkGpsAndStartUpdates()
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
+                        ) {
+                            Text("Turn On", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFC62828))
+                        }
+                    }
+                }
+            }
         }
     }
 }

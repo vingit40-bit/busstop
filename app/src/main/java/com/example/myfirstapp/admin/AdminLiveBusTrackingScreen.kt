@@ -203,28 +203,37 @@ fun AdminLiveBusTrackingScreen(
     }
 
     // Determine target bus & route for LeafletMapViewScreen (matching DriverLiveNavigationScreen.kt reference)
-    val selectedBus = selectedBusLocation ?: filteredLiveLocations.firstOrNull()
-    val selectedRoute = remember(routesList, selectedBus) {
-        routesList.find { r ->
-            selectedBus != null && (r.routeName.equals(selectedBus.routeName, ignoreCase = true) ||
-                    selectedBus.routeName.contains(r.startPoint, ignoreCase = true))
+    // Keep selectedBus synced with latest live location update for that bus ID / number
+    val currentSelectedBus = remember(selectedBusLocation, filteredLiveLocations) {
+        selectedBusLocation?.let { sel ->
+            filteredLiveLocations.find { 
+                (it.busId.isNotBlank() && it.busId.equals(sel.busId, ignoreCase = true)) ||
+                (it.busNumber.isNotBlank() && it.busNumber.equals(sel.busNumber, ignoreCase = true))
+            } ?: sel
         }
     }
 
-    val startPointName = remember(selectedRoute, selectedBus) {
-        selectedRoute?.startPoint ?: selectedBus?.routeName?.let {
+    val selectedRoute = remember(routesList, currentSelectedBus) {
+        routesList.find { r ->
+            currentSelectedBus != null && (r.routeName.equals(currentSelectedBus.routeName, ignoreCase = true) ||
+                    currentSelectedBus.routeName.contains(r.startPoint, ignoreCase = true))
+        }
+    }
+
+    val startPointName = remember(selectedRoute, currentSelectedBus) {
+        selectedRoute?.startPoint ?: currentSelectedBus?.routeName?.let {
             if (it.contains(" ➔ ")) it.split(" ➔ ")[0] else if (it.contains(" - ")) it.split(" - ")[0] else "Tuy"
         } ?: "Tuy"
     }
 
-    val destPointName = remember(selectedRoute, selectedBus) {
-        selectedRoute?.destination ?: selectedBus?.routeName?.let {
+    val destPointName = remember(selectedRoute, currentSelectedBus) {
+        selectedRoute?.destination ?: currentSelectedBus?.routeName?.let {
             if (it.contains(" ➔ ")) it.split(" ➔ ")[1] else if (it.contains(" - ")) it.split(" - ")[1] else "Pasay"
         } ?: "Pasay"
     }
 
-    val displayRouteName = remember(selectedBus) {
-        selectedBus?.routeName?.ifBlank { "Tuy ➔ Pasay" } ?: "Tuy ➔ Pasay"
+    val displayRouteName = remember(currentSelectedBus) {
+        currentSelectedBus?.routeName?.ifBlank { "Tuy ➔ Pasay" } ?: "Tuy ➔ Pasay"
     }
 
     Scaffold(
@@ -386,7 +395,7 @@ fun AdminLiveBusTrackingScreen(
                     .background(Color.White)
             ) {
                 LeafletMapViewScreen(
-                    leafletId = selectedBus?.busNumber ?: "AdminTrackerMap",
+                    leafletId = currentSelectedBus?.busNumber ?: "AdminTrackerMap",
                     routeName = displayRouteName,
                     startPoint = startPointName,
                     destination = destPointName,
@@ -394,10 +403,11 @@ fun AdminLiveBusTrackingScreen(
                     startLng = selectedRoute?.startLng?.takeIf { it != 0.0 },
                     destLat = selectedRoute?.destLat?.takeIf { it != 0.0 },
                     destLng = selectedRoute?.destLng?.takeIf { it != 0.0 },
-                    liveBusLat = selectedBus?.latitude?.takeIf { it != 0.0 },
-                    liveBusLng = selectedBus?.longitude?.takeIf { it != 0.0 },
-                    liveBusHeading = selectedBus?.heading ?: 0f,
-                    liveBusLabel = selectedBus?.let { "Bus ${it.busNumber} (${it.computedStatus()})" } ?: "Admin Fleet Tracker",
+                    liveBusLat = currentSelectedBus?.latitude?.takeIf { it != 0.0 },
+                    liveBusLng = currentSelectedBus?.longitude?.takeIf { it != 0.0 },
+                    liveBusHeading = currentSelectedBus?.heading ?: 0f,
+                    liveBusLabel = currentSelectedBus?.let { "Bus ${it.busNumber} (${it.computedStatus()})" } ?: "",
+                    allLiveBuses = filteredLiveLocations,
                     showAllRoutes = selectedBusLocation == null,
                     customRoutes = routesList,
                     showTopBar = false,
@@ -412,6 +422,45 @@ fun AdminLiveBusTrackingScreen(
                             .align(Alignment.TopCenter),
                         color = AdminGreen
                     )
+                }
+
+                // Selected Bus Focus Banner / Reset Overview Button
+                if (selectedBusLocation != null) {
+                    Surface(
+                        color = AdminGreen,
+                        shape = RoundedCornerShape(20.dp),
+                        shadowElevation = 4.dp,
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(8.dp)
+                            .clickable { selectedBusLocation = null }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.DirectionsBus,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Focused: Bus ${currentSelectedBus?.busNumber ?: ""} • Tap to View All",
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Clear",
+                                tint = Color.White,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    }
                 }
 
                 // Map Expand/Collapse Toggle Floating Button
@@ -505,12 +554,21 @@ fun AdminLiveBusTrackingScreen(
                                     }
                                 }
 
+                                val isThisBusSelected = selectedBusLocation?.let {
+                                    (it.busId.isNotBlank() && it.busId.equals(busLoc.busId, ignoreCase = true)) ||
+                                    (it.busNumber.isNotBlank() && it.busNumber.equals(busLoc.busNumber, ignoreCase = true))
+                                } ?: false
+
                                 LiveBusCard(
                                     location = busLoc,
                                     driverRecord = driverRecord,
-                                    isSelected = selectedBusLocation?.busId == busLoc.busId,
+                                    isSelected = isThisBusSelected,
                                     onSelect = {
-                                        selectedBusLocation = busLoc
+                                        if (isThisBusSelected) {
+                                            selectedBusLocation = null
+                                        } else {
+                                            selectedBusLocation = busLoc
+                                        }
                                     },
                                     onCallDriver = { phone -> callDriverPhone(phone) },
                                     onSmsDriver = { phone -> smsDriverPhone(phone) }

@@ -210,6 +210,8 @@ fun TerminalManagementScreen(onBack: () -> Unit) {
             startLat = term.latitude,
             startLng = term.longitude,
             isSingleTerminal = true,
+            showTopBar = true,
+            showBottomCard = true,
             onBack = { viewingMapTerminal = null }
         )
         return

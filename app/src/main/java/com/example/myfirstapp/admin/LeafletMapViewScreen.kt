@@ -75,6 +75,7 @@ fun LeafletMapViewScreen(
     liveBusLng: Double? = null,
     liveBusHeading: Float = 0f,
     liveBusLabel: String = "",
+    allLiveBuses: List<com.example.myfirstapp.LiveBusLocation> = emptyList(),
     isSingleTerminal: Boolean = false,
     showAllRoutes: Boolean = false,
     customRoutes: List<BusRoute> = emptyList(),
@@ -301,6 +302,21 @@ fun LeafletMapViewScreen(
     val liveBusLngJS = if (liveBusLng != null && liveBusLng != 0.0) liveBusLng.toString() else "null"
     val liveBusLabelJS = remember(liveBusLabel) { liveBusLabel.replace("'", "\\'") }
 
+    val allLiveBusesJsonData = remember(allLiveBuses) {
+        val sb = StringBuilder("[")
+        allLiveBuses.forEachIndexed { idx, bus ->
+            if (idx > 0) sb.append(",")
+            val cleanBusNum = bus.busNumber.replace("'", "\\'")
+            val cleanBusId = bus.busId.replace("'", "\\'")
+            val cleanDriver = bus.driverName.replace("'", "\\'")
+            val cleanRoute = bus.routeName.replace("'", "\\'")
+            val cleanStatus = bus.computedStatus().replace("'", "\\'")
+            sb.append("{\"busNumber\":\"$cleanBusNum\",\"busId\":\"$cleanBusId\",\"driver\":\"$cleanDriver\",\"route\":\"$cleanRoute\",\"status\":\"$cleanStatus\",\"lat\":${bus.latitude},\"lng\":${bus.longitude},\"heading\":${bus.heading},\"speed\":${bus.speedKmh}}")
+        }
+        sb.append("]")
+        sb.toString()
+    }
+
     LaunchedEffect(liveBusLabel, isMapLoaded) {
         if (isMapLoaded && liveBusLabel.isNotBlank()) {
             val cleanLabel = liveBusLabel.replace("'", "\\'")
@@ -311,11 +327,21 @@ fun LeafletMapViewScreen(
         }
     }
 
+    LaunchedEffect(allLiveBusesJsonData, isMapLoaded, showAllRoutes) {
+        if (isMapLoaded && allLiveBusesJsonData.isNotBlank() && showAllRoutes) {
+            webViewRef?.evaluateJavascript(
+                "if(window.updateAllBusLocations) { window.updateAllBusLocations($allLiveBusesJsonData); }",
+                null
+            )
+        }
+    }
+
     LaunchedEffect(liveBusLat, liveBusLng, liveBusHeading, liveBusLabel, isMapLoaded) {
         if (isMapLoaded && liveBusLat != null && liveBusLng != null && liveBusLat != 0.0 && liveBusLng != 0.0) {
             val cleanLabel = liveBusLabel.replace("'", "\\'")
+            val autoCenter = isDriverNav
             webViewRef?.evaluateJavascript(
-                "if(window.updateBusLocation) { window.updateBusLocation($liveBusLat, $liveBusLng, $liveBusHeading, '$cleanLabel'); }",
+                "if(window.updateBusLocation) { window.updateBusLocation($liveBusLat, $liveBusLng, $liveBusHeading, '$cleanLabel', $autoCenter); }",
                 null
             )
         }
@@ -356,6 +382,9 @@ fun LeafletMapViewScreen(
                     font-weight: bold;
                     color: #116530;
                 }
+                .leaflet-marker-icon {
+                    transition: transform 0.4s ease-out, top 0.4s ease-out, left 0.4s ease-out;
+                }
             </style>
         </head>
         <body>
@@ -371,6 +400,7 @@ fun LeafletMapViewScreen(
                 var isDriverNavMode = $isDriverNav;
                 var routesData = $routesJsonData;
                 var schedulesData = $schedulesJsonData;
+                var allLiveBusesData = $allLiveBusesJsonData;
 
                 var paramStartLat = $startLatJS;
                 var paramStartLng = $startLngJS;
@@ -381,6 +411,7 @@ fun LeafletMapViewScreen(
                 var paramLiveBusLng = $liveBusLngJS;
                 var paramLiveBusHeading = $liveBusHeading;
                 var paramLiveBusLabel = "$liveBusLabelJS";
+                var isUserInteracting = false;
 
                 var knownLocations = {
                     "city terminal": [14.5995, 120.9842],
@@ -570,6 +601,49 @@ fun LeafletMapViewScreen(
                 window.addEventListener('resize', drawVectorMap);
 
                 // --- LAYER 2: Leaflet Tile Engine ---
+                window.busFleetMarkers = window.busFleetMarkers || {};
+                window.updateAllBusLocations = function(busesList) {
+                    if (!busesList || !window.map) return;
+                    var activeKeys = {};
+                    busesList.forEach(function(bus) {
+                        var key = bus.busNumber || bus.busId;
+                        if (!key || bus.lat === null || bus.lng === null || bus.lat === 0.0 || bus.lng === 0.0) return;
+                        activeKeys[key] = true;
+                        var coords = [bus.lat, bus.lng];
+                        var labelText = "🚌 Bus " + bus.busNumber + " (" + bus.status + ")";
+                        var statusColor = bus.status === 'Moving' ? '#116530' : (bus.status === 'Stopped' ? '#E65100' : '#616161');
+
+                        if (window.busFleetMarkers[key]) {
+                            var marker = window.busFleetMarkers[key];
+                            marker.setLatLng(coords);
+                            var iconDiv = marker.getElement();
+                            if (iconDiv) {
+                                var labelElem = iconDiv.querySelector('.bus-fleet-label');
+                                if (labelElem) labelElem.innerText = labelText;
+                                var badgeElem = iconDiv.querySelector('.bus-fleet-badge');
+                                if (badgeElem) badgeElem.style.background = statusColor;
+                            }
+                        } else {
+                            var busIcon = L.divIcon({
+                                className: 'live-bus-fleet-marker',
+                                html: "<div class='bus-fleet-badge' style='background:" + statusColor + ";color:white;padding:6px 12px;border-radius:16px;font-weight:bold;font-size:11px;border:2px solid white;box-shadow:0 3px 8px rgba(0,0,0,0.35);white-space:nowrap;'><span class='bus-fleet-label'>" + labelText + "</span></div>",
+                                iconSize: [160, 30],
+                                iconAnchor: [80, 15]
+                            });
+                            var marker = L.marker(coords, { icon: busIcon }).addTo(window.map)
+                                .bindPopup("<b>Bus: " + bus.busNumber + "</b><br>Driver: " + bus.driver + "<br>Route: " + bus.route + "<br>Status: " + bus.status + "<br>Speed: " + bus.speed + " km/h");
+                            window.busFleetMarkers[key] = marker;
+                        }
+                    });
+
+                    for (var k in window.busFleetMarkers) {
+                        if (!activeKeys[k]) {
+                            window.map.removeLayer(window.busFleetMarkers[k]);
+                            delete window.busFleetMarkers[k];
+                        }
+                    }
+                };
+
                 function initLeafletEngine() {
                     if (typeof L === 'undefined') {
                         setTimeout(initLeafletEngine, 150);
@@ -585,6 +659,11 @@ fun LeafletMapViewScreen(
                         if (showAllRoutesMode && routesData && routesData.length > 0) {
                             // REAL-TIME MULTI-ROUTE TRACKER ENGINE
                             var map = L.map('map-layer', { zoomControl: true }).setView([14.3000, 120.9500], 10);
+                            window.map = map;
+
+                            window.map.on('movestart dragstart zoomstart', function(e) {
+                                if (e && e.originalEvent) { isUserInteracting = true; }
+                            });
 
                             L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
                                 maxZoom: 19,
@@ -637,7 +716,6 @@ fun LeafletMapViewScreen(
                                 L.marker(rDestCoords, { icon: destIcon }).addTo(map)
                                     .bindPopup("<b>Bus Route " + route.id + " (Destination)</b><br>" + route.name + "<br><b>Location:</b> " + route.dest);
 
-                                // Fetch OSRM Turn-by-Turn Driving Road Route
                                 var osrmUrl = "https://router.project-osrm.org/route/v1/driving/" +
                                     rStartCoords[1] + "," + rStartCoords[0] + ";" +
                                     rDestCoords[1] + "," + rDestCoords[0] +
@@ -663,9 +741,18 @@ fun LeafletMapViewScreen(
                                 map.fitBounds(allBounds, { padding: [40, 40] });
                             }
 
+                            if (allLiveBusesData && allLiveBusesData.length > 0) {
+                                window.updateAllBusLocations(allLiveBusesData);
+                            }
+
                         } else if (isSingleMode) {
                             // Single Terminal Hub Mode (1 Pin Only with Bus Icon)
                             var map = L.map('map-layer', { zoomControl: true }).setView(startCoords, 15);
+                            window.map = map;
+
+                            window.map.on('movestart dragstart zoomstart', function(e) {
+                                if (e && e.originalEvent) { isUserInteracting = true; }
+                            });
 
                             L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
                                 maxZoom: 19,
@@ -684,6 +771,10 @@ fun LeafletMapViewScreen(
                         } else {
                             // Single Two-Point Driving Route Mode with Bus Icons
                             window.map = L.map('map-layer', { zoomControl: true }).setView(startCoords, 12);
+
+                            window.map.on('movestart dragstart zoomstart', function(e) {
+                                if (e && e.originalEvent) { isUserInteracting = true; }
+                            });
 
                             L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
                                 maxZoom: 19,
@@ -710,82 +801,34 @@ fun LeafletMapViewScreen(
                             L.marker(destCoords, { icon: redIcon }).addTo(window.map)
                                 .bindPopup("<b>Bus Route Destination: " + cleanDestName + "</b>");
 
-                            var turnSteps = [];
+                            if (isDriverNavMode || (paramLiveBusLat !== null && paramLiveBusLng !== null && paramLiveBusLat !== 0.0 && paramLiveBusLng !== 0.0)) {
+                                var initialBusPos = (paramLiveBusLat !== null && paramLiveBusLng !== null && paramLiveBusLat !== 0.0 && paramLiveBusLng !== 0.0) ? [paramLiveBusLat, paramLiveBusLng] : startCoords;
+                                var initialMarkerLabel = paramLiveBusLabel || (isDriverNavMode ? "Driver Navigation" : "");
 
-                            function buildManeuverSteps(rawSteps, start, dest) {
-                                var stepsList = [];
-                                if (rawSteps && rawSteps.length > 0) {
-                                    rawSteps.forEach(function(st, idx) {
-                                        var m = st.maneuver;
-                                        var mType = m.type || 'turn';
-                                        var modifier = m.modifier || 'right';
-                                        var street = st.name ? ("onto " + st.name) : "along route";
-                                        var text = "";
-
-                                        if (idx === 0) {
-                                            text = "Head " + modifier + " towards " + cleanDestName;
-                                        } else if (mType.indexOf('arrive') !== -1) {
-                                            text = "In 50 meters, you will arrive at " + cleanDestName;
-                                        } else {
-                                            text = "In 200 meters, " + mType + " " + modifier + " " + street;
-                                        }
-
-                                        stepsList.push({
-                                            lat: m.location[1],
-                                            lng: m.location[0],
-                                            heading: st.bearing_after || 0,
-                                            text: text.trim(),
-                                            spoken: false
-                                        });
-                                    });
-                                }
-
-                                if (stepsList.length === 0) {
-                                    var p1Lat = start[0], p1Lng = start[1];
-                                    var p2Lat = dest[0], p2Lng = dest[1];
-                                    var midLat = (p1Lat + p2Lat) / 2.0;
-                                    var midLng = (p1Lng + p2Lng) / 2.0;
-
-                                    stepsList = [
-                                        { lat: p1Lat, lng: p1Lng, heading: 0, text: "Head North on " + cleanStartName + " towards " + cleanDestName, spoken: false },
-                                        { lat: p1Lat + (midLat - p1Lat) * 0.5, lng: p1Lng + (midLng - p1Lng) * 0.5, heading: 45, text: "In 300 meters, turn right onto Main Avenue Expressway", spoken: false },
-                                        { lat: midLat, lng: midLng, heading: 90, text: "In 500 meters, turn left onto Transit Boulevard", spoken: false },
-                                        { lat: midLat + (p2Lat - midLat) * 0.5, lng: midLng + (p2Lng - midLng) * 0.5, heading: 135, text: "In 200 meters, continue straight towards terminal", spoken: false },
-                                        { lat: p2Lat, lng: p2Lng, heading: 180, text: "You have arrived at " + cleanDestName + ". Navigation complete.", spoken: false }
-                                    ];
-                                }
-                                return stepsList;
+                                window.busLiveMarker = L.marker(initialBusPos, {
+                                    icon: L.divIcon({
+                                        className: 'live-driver-marker',
+                                        html: "<div style='background:#116530;color:white;padding:6px 14px;border-radius:20px;font-weight:bold;font-size:12px;border:3px solid white;box-shadow:0 4px 12px rgba(0,0,0,0.4);white-space:nowrap;display:flex;align-items:center;gap:4px;'><span id='driver-nav-arrow' style='display:inline-block;transition:transform 0.3s ease;font-size:14px;'>➔</span> <span id='live-marker-label'>" + initialMarkerLabel + "</span></div>",
+                                        iconSize: [160, 36],
+                                        iconAnchor: [80, 18]
+                                    })
+                                }).addTo(window.map);
                             }
-
-                            var initialBusPos = (paramLiveBusLat !== null && paramLiveBusLng !== null && paramLiveBusLat !== 0.0 && paramLiveBusLng !== 0.0) ? [paramLiveBusLat, paramLiveBusLng] : startCoords;
-                            var initialMarkerLabel = paramLiveBusLabel || "GPS Navigation";
-
-                            window.busLiveMarker = L.marker(initialBusPos, {
-                                icon: L.divIcon({
-                                    className: 'live-driver-marker',
-                                    html: "<div style='background:#116530;color:white;padding:6px 14px;border-radius:20px;font-weight:bold;font-size:12px;border:3px solid white;box-shadow:0 4px 12px rgba(0,0,0,0.4);white-space:nowrap;display:flex;align-items:center;gap:4px;'><span id='driver-nav-arrow' style='display:inline-block;transition:transform 0.3s ease;font-size:14px;'>➔</span> <span id='live-marker-label'>" + initialMarkerLabel + "</span></div>",
-                                    iconSize: [160, 36],
-                                    iconAnchor: [80, 18]
-                                })
-                            }).addTo(window.map);
 
                             var lastLat = null;
                             var lastLng = null;
 
-                            window.updateBusLocation = function(lat, lng, heading, labelText) {
+                            window.updateBusLocation = function(lat, lng, heading, labelText, autoCenter) {
                                 if (lat === null || lng === null || lat === 0.0 || lng === 0.0) return;
-
-                                if (lastLat !== null && lastLng !== null) {
-                                    var distMoved = window.map.distance([lastLat, lastLng], [lat, lng]);
-                                    if (distMoved < 1 && !labelText) return;
-                                }
 
                                 lastLat = lat;
                                 lastLng = lng;
 
                                 if (window.busLiveMarker) {
                                     window.busLiveMarker.setLatLng([lat, lng]);
-                                    window.map.panTo([lat, lng], { animate: true, duration: 0.8 });
+                                    if (autoCenter === true && !isUserInteracting && window.map) {
+                                        window.map.panTo([lat, lng], { animate: true, duration: 0.5 });
+                                    }
                                 }
 
                                 var arrowElem = document.getElementById('driver-nav-arrow');
@@ -799,7 +842,6 @@ fun LeafletMapViewScreen(
                                 }
                             };
 
-                            // OSRM Driving Engine Route
                             var osrmUrl = "https://router.project-osrm.org/route/v1/driving/" +
                                 startCoords[1] + "," + startCoords[0] + ";" +
                                 destCoords[1] + "," + destCoords[0] +
@@ -843,7 +885,7 @@ fun LeafletMapViewScreen(
     """.trimIndent()
 
     // Write HTML directly to local cache file for native WebView URL loading
-    val mapHtmlFile = remember(leafletHtmlContent, leafletId, showAllRoutes, activeRoutesList.size) {
+    val mapHtmlFile = remember(leafletId, showAllRoutes, isSingleTerminal, isDriverNav, activeRoutesList.size) {
         try {
             val file = File(context.cacheDir, "leaflet_map_${if (showAllRoutes) "all_routes" else leafletId}.html")
             file.writeText(leafletHtmlContent, Charsets.UTF_8)

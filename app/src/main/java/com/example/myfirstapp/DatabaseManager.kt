@@ -1416,12 +1416,17 @@ object DatabaseManager {
                             val speed = obj.optDouble("speed_kmh", 0.0).toFloat()
                             val heading = obj.optDouble("heading", 0.0).toFloat()
                             val st = obj.safeString("status", "Active")
-                            val ts = obj.optLong("timestamp", System.currentTimeMillis())
+                            val tsRaw = obj.opt("timestamp")
+                            val ts = when (tsRaw) {
+                                is Number -> tsRaw.toLong().let { if (it > 0) it else System.currentTimeMillis() }
+                                is String -> tsRaw.toLongOrNull() ?: System.currentTimeMillis()
+                                else -> System.currentTimeMillis()
+                            }
 
                             if (lat != 0.0 && lng != 0.0) {
                                 val locObj = LiveBusLocation(bId, bNum, dName, rName, lat, lng, speed, heading, st, ts)
-                                liveGpsMap[bId.trim().lowercase()] = locObj
-                                liveGpsMap[bNum.trim().lowercase()] = locObj
+                                if (bId.isNotBlank()) liveGpsMap[bId.trim().lowercase()] = locObj
+                                if (bNum.isNotBlank()) liveGpsMap[bNum.trim().lowercase()] = locObj
                             }
                         }
                     } catch (_: Exception) {}

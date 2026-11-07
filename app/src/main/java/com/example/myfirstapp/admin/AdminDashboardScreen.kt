@@ -12,6 +12,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.AltRoute
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.DirectionsBus
@@ -261,6 +262,7 @@ fun AdminDashboardScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AdminPaymentSettingsScreen(onBack: () -> Unit = {}) {
     val context = LocalContext.current
@@ -294,143 +296,180 @@ fun AdminPaymentSettingsScreen(onBack: () -> Unit = {}) {
         )
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-            .verticalScroll(rememberScrollState())
-    ) {
-        Text("Online Payment & QR Settings", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.Black)
-        Text("Configure GCash and PayMaya QR codes for commuter online payments", fontSize = 12.sp, color = Color.Gray)
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // GCash Settings Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(14.dp),
-            colors = CardDefaults.cardColors(containerColor = Color.White),
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text(
+                            text = "Online Payment & QR Settings",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp,
+                            color = Color.White
+                        )
+                        Text(
+                            text = "Configure GCash and PayMaya QR codes for payments",
+                            fontSize = 11.sp,
+                            color = Color.White.copy(alpha = 0.85f)
+                        )
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back to Dashboard",
+                            tint = Color.White
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = AdminGreen)
+            )
+        },
+        containerColor = AdminBg
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp)
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text("GCash Payment Configuration", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = AdminGreen)
-                Spacer(modifier = Modifier.height(10.dp))
+            // GCash Settings Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("GCash Payment Configuration", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = AdminGreen)
+                    Spacer(modifier = Modifier.height(10.dp))
 
-                OutlinedTextField(
-                    value = gcashNumber,
-                    onValueChange = { gcashNumber = it },
-                    label = { Text("GCash Mobile / Account Number") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                    OutlinedTextField(
+                        value = gcashNumber,
+                        onValueChange = { gcashNumber = it },
+                        label = { Text("GCash Mobile / Account Number") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
 
-                Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
-                OutlinedButton(
-                    onClick = { gcashPickerLauncher.launch("image/*") },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Icon(Icons.Default.QrCode, contentDescription = null)
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(if (gcashQrUri != null) "✓ New GCash QR Selected" else "Upload Official GCash QR Image")
+                    OutlinedButton(
+                        onClick = { gcashPickerLauncher.launch("image/*") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.QrCode, contentDescription = null, tint = AdminGreen)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (gcashQrUri != null) "✓ New GCash QR Selected" else "Upload Official GCash QR Image",
+                            color = AdminGreen,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
-        }
 
-        Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
-        // PayMaya Settings Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(14.dp),
-            colors = CardDefaults.cardColors(containerColor = Color.White),
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text("PayMaya Payment Configuration", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = AdminGreen)
-                Spacer(modifier = Modifier.height(10.dp))
+            // PayMaya Settings Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("PayMaya Payment Configuration", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = AdminGreen)
+                    Spacer(modifier = Modifier.height(10.dp))
 
-                OutlinedTextField(
-                    value = paymayaNumber,
-                    onValueChange = { paymayaNumber = it },
-                    label = { Text("PayMaya Account / Mobile Number") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                    OutlinedTextField(
+                        value = paymayaNumber,
+                        onValueChange = { paymayaNumber = it },
+                        label = { Text("PayMaya Account / Mobile Number") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
 
-                Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
-                OutlinedButton(
-                    onClick = { paymayaPickerLauncher.launch("image/*") },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Icon(Icons.Default.QrCode, contentDescription = null)
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(if (paymayaQrUri != null) "✓ New PayMaya QR Selected" else "Upload Official PayMaya QR Image")
+                    OutlinedButton(
+                        onClick = { paymayaPickerLauncher.launch("image/*") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.QrCode, contentDescription = null, tint = AdminGreen)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (paymayaQrUri != null) "✓ New PayMaya QR Selected" else "Upload Official PayMaya QR Image",
+                            color = AdminGreen,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
-        }
 
-        Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
-        Button(
-            onClick = {
-                isSaving = true
-                val saveAction = { gUrl: String, pUrl: String ->
-                    val settings = PaymentSettings(
-                        id = "default_settings",
-                        gcashNumber = gcashNumber.trim(),
-                        gcashQrUrl = gUrl,
-                        paymayaNumber = paymayaNumber.trim(),
-                        paymayaQrUrl = pUrl
-                    )
-                    DatabaseManager.savePaymentSettings(
-                        settings,
-                        onSuccess = {
-                            isSaving = false
-                            Toast.makeText(context, "Payment settings & QR codes saved to Supabase!", Toast.LENGTH_SHORT).show()
-                        },
-                        onFailure = { err ->
-                            isSaving = false
-                            Toast.makeText(context, "Error: ${err.localizedMessage}", Toast.LENGTH_SHORT).show()
-                        }
-                    )
-                }
+            Button(
+                onClick = {
+                    isSaving = true
+                    val saveAction = { gUrl: String, pUrl: String ->
+                        val settings = PaymentSettings(
+                            id = "default_settings",
+                            gcashNumber = gcashNumber.trim(),
+                            gcashQrUrl = gUrl,
+                            paymayaNumber = paymayaNumber.trim(),
+                            paymayaQrUrl = pUrl
+                        )
+                        DatabaseManager.savePaymentSettings(
+                            settings,
+                            onSuccess = {
+                                isSaving = false
+                                Toast.makeText(context, "Payment settings & QR codes saved to Supabase!", Toast.LENGTH_SHORT).show()
+                            },
+                            onFailure = { err ->
+                                isSaving = false
+                                Toast.makeText(context, "Error: ${err.localizedMessage}", Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                    }
 
-                if (gcashQrUri != null) {
-                    DatabaseManager.uploadBusImageToSupabaseStorage(
-                        context, gcashQrUri!!,
-                        onSuccess = { uploadedGUrl ->
-                            if (paymayaQrUri != null) {
-                                DatabaseManager.uploadBusImageToSupabaseStorage(
-                                    context, paymayaQrUri!!,
-                                    onSuccess = { uploadedPUrl -> saveAction(uploadedGUrl, uploadedPUrl) },
-                                    onFailure = { saveAction(uploadedGUrl, paymayaQrUrl) }
-                                )
-                            } else saveAction(uploadedGUrl, paymayaQrUrl)
-                        },
-                        onFailure = { saveAction(gcashQrUrl, paymayaQrUrl) }
-                    )
-                } else if (paymayaQrUri != null) {
-                    DatabaseManager.uploadBusImageToSupabaseStorage(
-                        context, paymayaQrUri!!,
-                        onSuccess = { uploadedPUrl -> saveAction(gcashQrUrl, uploadedPUrl) },
-                        onFailure = { saveAction(gcashQrUrl, paymayaQrUrl) }
-                    )
+                    if (gcashQrUri != null) {
+                        DatabaseManager.uploadBusImageToSupabaseStorage(
+                            context, gcashQrUri!!,
+                            onSuccess = { uploadedGUrl ->
+                                if (paymayaQrUri != null) {
+                                    DatabaseManager.uploadBusImageToSupabaseStorage(
+                                        context, paymayaQrUri!!,
+                                        onSuccess = { uploadedPUrl -> saveAction(uploadedGUrl, uploadedPUrl) },
+                                        onFailure = { saveAction(uploadedGUrl, paymayaQrUrl) }
+                                    )
+                                } else saveAction(uploadedGUrl, paymayaQrUrl)
+                            },
+                            onFailure = { saveAction(gcashQrUrl, paymayaQrUrl) }
+                        )
+                    } else if (paymayaQrUri != null) {
+                        DatabaseManager.uploadBusImageToSupabaseStorage(
+                            context, paymayaQrUri!!,
+                            onSuccess = { uploadedPUrl -> saveAction(gcashQrUrl, uploadedPUrl) },
+                            onFailure = { saveAction(gcashQrUrl, paymayaQrUrl) }
+                        )
+                    } else {
+                        saveAction(gcashQrUrl, paymayaQrUrl)
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = AdminGreen),
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                if (isSaving) {
+                    CircularProgressIndicator(color = Color.White, modifier = Modifier.size(22.dp))
                 } else {
-                    saveAction(gcashQrUrl, paymayaQrUrl)
+                    Text("Save Payment QR", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color.White)
                 }
-            },
-            colors = ButtonDefaults.buttonColors(containerColor = AdminGreen),
-            modifier = Modifier.fillMaxWidth().height(50.dp),
-            shape = RoundedCornerShape(10.dp)
-        ) {
-            if (isSaving) {
-                CircularProgressIndicator(color = Color.White, modifier = Modifier.size(22.dp))
-            } else {
-                Text("Save Payment QR", fontWeight = FontWeight.Bold, fontSize = 15.sp)
             }
         }
     }

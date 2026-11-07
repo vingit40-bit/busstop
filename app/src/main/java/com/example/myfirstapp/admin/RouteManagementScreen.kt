@@ -92,6 +92,8 @@ fun RouteManagementScreen(onBack: () -> Unit = {}) {
             startLng = if (targetRoute.startLng != 0.0) targetRoute.startLng else null,
             destLat = if (targetRoute.destLat != 0.0) targetRoute.destLat else null,
             destLng = if (targetRoute.destLng != 0.0) targetRoute.destLng else null,
+            showTopBar = true,
+            showBottomCard = true,
             onBack = { trackingRoute = null }
         )
         return

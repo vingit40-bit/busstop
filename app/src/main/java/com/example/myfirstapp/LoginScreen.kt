@@ -160,26 +160,17 @@ fun LoginScreen(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // Remember Password & Forgot Password Row
+                // Remember Password Row
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(
-                            checked = rememberMe,
-                            onCheckedChange = { rememberMe = it },
-                            colors = CheckboxDefaults.colors(checkedColor = TransitGreen)
-                        )
-                        Text("Remember Password", fontSize = 12.sp, color = Color.DarkGray)
-                    }
-
-                    TextButton(onClick = {
-                        Toast.makeText(context, "Contact support to reset password", Toast.LENGTH_SHORT).show()
-                    }) {
-                        Text("Forgot Password?", fontSize = 12.sp, color = TransitGreen)
-                    }
+                    Checkbox(
+                        checked = rememberMe,
+                        onCheckedChange = { rememberMe = it },
+                        colors = CheckboxDefaults.colors(checkedColor = TransitGreen)
+                    )
+                    Text("Remember Password", fontSize = 12.sp, color = Color.DarkGray)
                 }
 
                 if (errorMessage.isNotEmpty()) {
