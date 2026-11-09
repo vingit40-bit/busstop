@@ -6,6 +6,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -99,6 +102,7 @@ fun SignUpScreen(
                         errorMessage = ""
                     },
                     label = { Text("Full Name") },
+                    placeholder = { Text("e.g. Juan Dela Cruz") },
                     singleLine = true,
                     colors = textFieldColors,
                     shape = RoundedCornerShape(10.dp),
@@ -114,7 +118,9 @@ fun SignUpScreen(
                         email = it
                         errorMessage = ""
                     },
-                    label = { Text("Email Address") },
+                    label = { Text("Email Address (@g.batstate-u.edu)") },
+                    placeholder = { Text("e.g. 21-12345@g.batstate-u.edu") },
+                    supportingText = { Text("Must use your @g.batstate-u.edu institutional email", fontSize = 11.sp) },
                     singleLine = true,
                     colors = textFieldColors,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
@@ -132,6 +138,7 @@ fun SignUpScreen(
                         errorMessage = ""
                     },
                     label = { Text("Phone Number") },
+                    placeholder = { Text("e.g. 09123456789") },
                     singleLine = true,
                     colors = textFieldColors,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
@@ -149,14 +156,19 @@ fun SignUpScreen(
                         errorMessage = ""
                     },
                     label = { Text("Password") },
+                    placeholder = { Text("Enter at least 8 characters") },
                     singleLine = true,
                     colors = textFieldColors,
                     supportingText = { Text("Must be at least 8 characters", fontSize = 11.sp) },
                     visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     trailingIcon = {
-                        TextButton(onClick = { passwordVisible = !passwordVisible }) {
-                            Text(if (passwordVisible) "Hide" else "Show", color = TransitGreen)
+                        IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                            Icon(
+                                imageVector = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                contentDescription = if (passwordVisible) "Hide password" else "Show password",
+                                tint = TransitGreen
+                            )
                         }
                     },
                     shape = RoundedCornerShape(10.dp),
@@ -199,6 +211,8 @@ fun SignUpScreen(
                         when {
                             fullName.isBlank() -> errorMessage = "Please enter your full name"
                             email.isBlank() -> errorMessage = "Please enter your email address"
+                            !email.trim().lowercase().endsWith("@g.batstate-u.edu") -> errorMessage = "Email must end with @g.batstate-u.edu"
+                            phoneNumber.isBlank() -> errorMessage = "Please enter your phone number"
                             password.length < 8 -> errorMessage = "Password must be at least 8 characters"
                             !agreedToTerms -> errorMessage = "Please agree to the Terms of Service"
                             else -> {

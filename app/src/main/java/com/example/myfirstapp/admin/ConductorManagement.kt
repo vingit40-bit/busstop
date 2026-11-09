@@ -283,8 +283,12 @@ fun ConductorManagementScreen(onBack: () -> Unit) {
                         visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         trailingIcon = {
-                            TextButton(onClick = { passwordVisible = !passwordVisible }) {
-                                Text(if (passwordVisible) "Hide" else "Show", color = AdminGreen, fontSize = 11.sp)
+                            IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                                Icon(
+                                    imageVector = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    contentDescription = if (passwordVisible) "Hide password" else "Show password",
+                                    tint = AdminGreen
+                                )
                             }
                         },
                         modifier = Modifier.fillMaxWidth()
